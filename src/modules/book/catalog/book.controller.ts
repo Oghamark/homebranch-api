@@ -205,12 +205,12 @@ export class BookController {
       this.logger.error('Failed to upload book:', error);
       throw error;
     } finally {
-      if (files.file && files.file.length > 0) {
-        await unlink(files.file[0].path);
-      }
-      if (files.coverImage && files.coverImage.length > 0) {
-        await unlink(files.coverImage[0].path);
-      }
+      // Storage moves the temp files, so they may already be gone
+      await Promise.all(
+        [files?.file?.[0]?.path, files?.coverImage?.[0]?.path]
+          .filter((path): path is string => !!path)
+          .map((path) => unlink(path).catch(() => {})),
+      );
     }
   }
 
