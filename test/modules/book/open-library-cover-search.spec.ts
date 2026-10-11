@@ -50,6 +50,34 @@ describe('OpenLibraryGateway cover search', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('follows trusted Archive.org redirects and returns the cover image', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://archive.org/download/cover.zip/image.jpg' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://ia801234.us.archive.org/view_archive.php?file=image.jpg' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from([0xff, 0xd8, 0xff]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        }),
+      );
+
+    await expect(gateway.fetchBookCover(42)).resolves.toEqual({
+      buffer: Buffer.from([0xff, 0xd8, 0xff]),
+      mimeType: 'image/jpeg',
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
   it('rejects invalid cover identifiers before making a network request', async () => {
     await expect(gateway.fetchBookCover(-1)).rejects.toBeInstanceOf(BadRequestException);
     expect(fetchSpy).not.toHaveBeenCalled();

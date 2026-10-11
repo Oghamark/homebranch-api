@@ -246,7 +246,10 @@ export class OpenLibraryGateway {
           throw new BadGatewayException('Open Library returned an invalid cover redirect');
         }
         const redirectUrl = new URL(location, url);
-        if (redirectUrl.protocol !== 'https:' || redirectUrl.hostname !== 'covers.openlibrary.org') {
+        const hostname = redirectUrl.hostname.toLowerCase();
+        const isTrustedHost =
+          hostname === 'covers.openlibrary.org' || hostname === 'archive.org' || hostname.endsWith('.archive.org');
+        if (redirectUrl.protocol !== 'https:' || !isTrustedHost) {
           throw new BadGatewayException('Open Library returned an untrusted cover redirect');
         }
         url = redirectUrl.toString();
