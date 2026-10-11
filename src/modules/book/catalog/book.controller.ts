@@ -32,7 +32,7 @@ import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/guards/roles.decorator';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
-import { IsOptional, IsUUID } from 'class-validator';
+import { IsInt, IsOptional, IsUUID, Min } from 'class-validator';
 import { tmpdir } from 'os';
 import { existsSync, mkdirSync } from 'fs';
 import { unlink } from 'fs-extra';
@@ -59,6 +59,12 @@ class LinkBooksDto {
 
 class AudiobookPreviewRequest {
   relativePaths: string;
+}
+
+class SelectBookCoverRequest {
+  @IsInt()
+  @Min(1)
+  coverId: number;
 }
 
 @Controller('books')
@@ -94,6 +100,28 @@ export class BookController {
     this.logger.log('Favorite book request received');
     await this.bookService.assertAccess(id, tenantScope(currentUser));
     return this.bookService.toggleFavorite(currentUser.id, id);
+  }
+
+  @Get(':id/covers')
+  @UseGuards(JwtAuthGuard)
+  async searchBookCovers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('query') query: string | undefined,
+    @CurrentUser() currentUser: Express.User,
+  ) {
+    await this.bookService.assertAccess(id, tenantScope(currentUser));
+    return this.bookService.searchBookCovers(id, query);
+  }
+
+  @Post(':id/cover')
+  @UseGuards(JwtAuthGuard)
+  async selectBookCover(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() request: SelectBookCoverRequest,
+    @CurrentUser() currentUser: Express.User,
+  ) {
+    await this.bookService.assertAccess(id, tenantScope(currentUser));
+    return this.bookService.selectBookCover(id, request.coverId);
   }
 
   @Get(`:id`)

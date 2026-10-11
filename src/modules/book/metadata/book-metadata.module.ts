@@ -16,6 +16,6 @@ import { BookPersistenceModule } from 'src/modules/book/persistence/book-persist
     CompositeSummaryGateway,
     MetadataSchedulerService,
   ],
-  exports: [CompositeMetadataGateway, CompositeSummaryGateway],
+  exports: [CompositeMetadataGateway, CompositeSummaryGateway, OpenLibraryGateway],
 })
 export class BookMetadataModule {}
