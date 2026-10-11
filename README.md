@@ -6,6 +6,8 @@
 Homebranch is a self-hosted web application for managing and reading your E-Book collection.
 It provides a user-friendly interface to organize, search, and read your ebooks across devices.
 
+> The project workspace, integrated development stack, and contribution process are maintained in the [Homebranch project repository](https://github.com/Oghamark/homebranch).
+
 > [!NOTE]
 >  The project is split into 3 repositories allowing you to choose the components you want to use:
 > - [Homebranch Web](https://github.com/Oghamark/homebranch-web): The frontend web application built with React and TypeScript
@@ -76,7 +78,7 @@ Authentication uses HTTP Basic Auth (email + password). Credentials are forwarde
 
 ## Contributing
 
-Contributions are welcome! Please see our [contribution guidelines](https://github.com/Oghamark/homebranch/blob/main/CONTRIBUTING.md)  for details on how to get involved.
+Contributions are welcome! See the [Homebranch contribution guidelines](https://github.com/Oghamark/homebranch/blob/dev/CONTRIBUTING.md) for the project contribution process and integrated development setup.
 
 ---
 
