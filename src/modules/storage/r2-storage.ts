@@ -124,7 +124,7 @@ export class R2Storage implements IStorageService {
       mimeType: response.ContentType ?? 'application/octet-stream',
       size: range
         ? Number(response.ContentRange?.split('/').at(-1) ?? response.ContentLength ?? 0)
-        : response.ContentLength ?? 0,
+        : (response.ContentLength ?? 0),
       contentRange: response.ContentRange,
     };
   }

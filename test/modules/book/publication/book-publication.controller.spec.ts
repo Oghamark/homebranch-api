@@ -110,13 +110,7 @@ describe('BookPublicationController', () => {
     );
 
     await expect(
-      controller.downloadBook(
-        user,
-        'book-1',
-        {},
-        { headers: { range: 'bytes=2-5' } } as never,
-        response as never,
-      ),
+      controller.downloadBook(user, 'book-1', {}, { headers: { range: 'bytes=2-5' } } as never, response as never),
     ).resolves.toBeDefined();
 
     expect(storage.getFileStream).toHaveBeenCalledWith('books/Audio Book.mp3', { start: 2, end: 5 });
@@ -154,13 +148,7 @@ describe('BookPublicationController', () => {
     );
 
     await expect(
-      controller.downloadBook(
-        user,
-        'book-1',
-        { track: '1' },
-        { headers: {} } as never,
-        response as never,
-      ),
+      controller.downloadBook(user, 'book-1', { track: '1' }, { headers: {} } as never, response as never),
     ).resolves.toBeDefined();
 
     expect(storage.getFileStream).toHaveBeenCalledWith('books/audiobook-tracks/part-2.mp3');
