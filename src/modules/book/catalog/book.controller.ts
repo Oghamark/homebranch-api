@@ -23,9 +23,10 @@ import { BookMutationService } from 'src/modules/book/catalog/book-mutation.serv
 import { BookService } from 'src/modules/book/catalog/book.service';
 import { UpdateBookDto } from 'src/modules/book/dto/update-book.dto';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { randomUUID } from 'crypto';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/guards/roles.decorator';
@@ -177,6 +178,32 @@ export class BookController {
       if (files.coverImage && files.coverImage.length > 0) {
         await unlink(files.coverImage[0].path);
       }
+    }
+  }
+
+  @Post('audiobook')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(
+    FilesInterceptor('files', 500, {
+      storage: diskStorage({
+        destination: (_req, _file, cb) => {
+          const uploadPath = join(tmpdir(), 'uploads', 'audiobooks');
+          if (!existsSync(uploadPath)) mkdirSync(uploadPath, { recursive: true });
+          cb(null, uploadPath);
+        },
+        filename: (_req, file, cb) => cb(null, `${randomUUID()}-${basename(file.originalname)}`),
+      }),
+    }),
+  )
+  async createAudiobook(
+    @CurrentUser() currentUser: Express.User,
+    @UploadedFiles() files: Express.Multer.File[],
+    @Body() request: CreateBookRequest,
+  ) {
+    try {
+      return await this.bookCreationService.createAudiobook(files ?? [], request.title, request.author, currentUser.id);
+    } finally {
+      await Promise.all((files ?? []).map((file) => unlink(file.path).catch(() => {})));
     }
   }
 

@@ -600,6 +600,14 @@ export async function permanentDeleteBook(
     const key = `books/${fileName}`;
     await storage.deleteFile(key);
   }
+  const audioFileNames = new Set(
+    book.formats?.flatMap((format) => format.audioTracks?.map((track) => track.fileName) ?? []) ?? [],
+  );
+  for (const fileName of audioFileNames) {
+    if (!fileNames.has(fileName)) {
+      await storage.deleteFile(`books/${fileName}`);
+    }
+  }
   await storage.deleteFile(`cover-images/${book.coverImageFileName}`);
   await repository.delete(id);
   return book;

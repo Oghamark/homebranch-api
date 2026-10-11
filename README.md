@@ -33,7 +33,7 @@ It provides a user-friendly interface to organize, search, and read your ebooks 
 
 ## Features
 
-- Book management with file upload (EPUB, PDF, single-file MP3, and M4B). Uploaded files are saved as `Author - Title.ext`; publication manifest (`GET /books/:id/manifest`) and content proxy (`GET /books/:id/content/:filename`) endpoints power the EPUB web reader, while the same logical book can track multiple linked formats
+- Book management with file upload (EPUB, PDF, MP3 audiobooks with one or more tracks, and M4B). Uploaded files are saved as `Author - Title.ext`; publication manifest (`GET /books/:id/manifest`) and content proxy (`GET /books/:id/content/:filename`) endpoints power the EPUB web reader, while the same logical book can track multiple linked formats
 - Automatic metadata enrichment from Open Library (genres, publisher, language, ratings, summary, ISBN, page count)
 - Optional Google Books enrichment for series info and any fields Open Library didn't populate
 - Linked format management — merge matching uploads into one book, keep multiple formats attached to the same title, and split or remove individual formats when needed

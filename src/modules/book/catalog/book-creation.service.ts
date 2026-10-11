@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
 import { basename, join, extname } from 'path';
 import { CreateBookRequest } from 'src/modules/book/dto/create-book-request';
 import { CompositeMetadataGateway } from 'src/modules/book/metadata/gateways/composite-metadata.gateway';
@@ -8,6 +8,7 @@ import { fillBookMetadataFromFileName } from 'src/modules/book/format/book-file-
 import { buildBookFormatMetadata } from 'src/modules/book/format/book-format-metadata';
 import { FileNameGenerator } from 'src/common/utils/filename-generator';
 import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
+import { BookFormatType } from 'src/modules/book/format/book-format-type.enum';
 import {
   detectBookFormatFromFileName,
   getBookFormatExtension,
@@ -24,6 +25,7 @@ import { stat, unlink } from 'fs-extra';
 import { tmpdir } from 'os';
 import { StorageQuotaService } from 'src/modules/cloud/storage-quota.service';
 import { isCloudMode } from 'src/common/utils/cloud';
+import { AudioTrack } from 'src/modules/book/format/audio-track';
 
 export type CreateBookResponse = Book | { skipped: true; existingBook: Book };
 
@@ -241,6 +243,61 @@ export class BookCreationService {
       });
 
     return createdBook;
+  }
+
+  async createAudiobook(
+    files: Array<{ path: string; originalname: string }>,
+    title: string,
+    author: string,
+    uploadedByUserId: string,
+  ): Promise<Book> {
+    if (files.length < 2 || files.some((file) => extname(file.originalname).toLowerCase() !== '.mp3')) {
+      throw new BadRequestException('An audiobook requires at least two MP3 files');
+    }
+    if (!title?.trim() || !author?.trim()) {
+      throw new BadRequestException('Audiobook title and author are required');
+    }
+
+    const firstResult = await this.createBook({
+      filePath: files[0].path,
+      title,
+      author,
+      uploadedByUserId,
+    });
+    if ('skipped' in firstResult) {
+      throw new ConflictException('A book with this audiobook format already exists');
+    }
+
+    const mp3Format = firstResult.formats?.find((format) => format.format === BookFormatType.MP3);
+    if (!mp3Format) {
+      throw new BadRequestException('The first audiobook track could not be registered as MP3');
+    }
+
+    const tracks: AudioTrack[] = [
+      { fileName: mp3Format.fileName, title: basename(files[0].originalname, extname(files[0].originalname)) },
+    ];
+    const additionalFileNames: string[] = [];
+    try {
+      for (const file of files.slice(1)) {
+        const fileSize = (await stat(file.path)).size;
+        if (isCloudMode() && uploadedByUserId) {
+          await this.storageQuota.assertCanStore(uploadedByUserId, fileSize);
+        }
+        const fileName = `audiobook-tracks/${randomUUID()}.mp3`;
+        await this.storage.uploadFileFromPath(file.path, {
+          key: `books/${fileName}`,
+          mimeType: 'audio/mpeg',
+        });
+        additionalFileNames.push(fileName);
+        tracks.push({ fileName, title: basename(file.originalname, extname(file.originalname)) });
+      }
+
+      await this.bookFormatProcessingService.updateAudioTracks(firstResult.id, tracks);
+      return this.bookPersistenceService.findBookById(firstResult.id);
+    } catch (error) {
+      await Promise.all(additionalFileNames.map((fileName) => this.storage.deleteFile(`books/${fileName}`)));
+      throw error;
+    }
   }
 
   private async deleteIncomingFiles(

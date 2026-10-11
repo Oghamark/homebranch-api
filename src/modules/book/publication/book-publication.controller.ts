@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
-import { IsOptional } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 import { BookFormatType } from 'src/modules/book/format/book-format-type.enum';
 import { BookPublicationService } from 'src/modules/book/publication/book-publication.service';
 import { buildExternalBaseUrl } from 'src/common/utils/external-url';
@@ -54,6 +54,10 @@ class BookFormatQueryDto {
 
   @IsOptional()
   inline?: string;
+
+  @IsOptional()
+  @IsString()
+  track?: string;
 }
 
 @Controller('books')
@@ -108,8 +112,27 @@ export class BookPublicationController {
   ): Promise<StreamableFile | void> {
     await this.bookService.assertAccess(id, tenantScope(currentUser));
     const { book, format, fileName } = await this.bookService.getDownload(id, query.format);
+    let selectedFileName = fileName;
+    if (query.track !== undefined) {
+      if (format !== BookFormatType.MP3 || !/^\d+$/.test(query.track)) {
+        response.status(400).json({ success: false, error: 'INVALID_AUDIO_TRACK', message: 'Invalid audio track' });
+        return;
+      }
+      const trackIndex = Number(query.track);
+      const tracks = book.formats?.find((bookFormat) => bookFormat.format === format)?.audioTracks;
+      const selectedTrack = tracks?.[trackIndex];
+      if (tracks?.length && !selectedTrack) {
+        response.status(404).json({ success: false, error: 'AUDIO_TRACK_NOT_FOUND', message: 'Audio track not found' });
+        return;
+      }
+      if (selectedTrack) selectedFileName = selectedTrack.fileName;
+      else if (trackIndex !== 0) {
+        response.status(404).json({ success: false, error: 'AUDIO_TRACK_NOT_FOUND', message: 'Audio track not found' });
+        return;
+      }
+    }
     const sanitizedTitle = book.title.replace(/[^\w\s-]/g, '').trim() || 'book';
-    const safeFileName = basename(fileName);
+    const safeFileName = selectedFileName === fileName ? basename(fileName) : selectedFileName;
     let storageStreamResult: StorageStreamResult;
     try {
       const fileKey = `books/${safeFileName}`;

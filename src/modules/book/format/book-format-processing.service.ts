@@ -12,6 +12,7 @@ import { SyncableMetadata } from 'src/common/value-objects/syncable-metadata';
 import { EpubMetadataWriterService } from 'src/modules/book/format/epub-metadata-writer.service';
 import { BookEntity } from 'src/modules/book/book.entity';
 import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
+import { AudioTrack } from 'src/modules/book/format/audio-track';
 import { buildBookFormatMetadata, hasStoredFormatMetadata } from 'src/modules/book/format/book-format-metadata';
 import { IStorageService, STORAGE_SERVICE_TOKEN } from '../../storage/storage.interface';
 
@@ -49,6 +50,10 @@ export class BookFormatProcessingService {
   async parseMetadata(key: string, format: BookFormatType): Promise<BookFileMetadata> {
     const parser = this.parsers[format];
     return parser ? parser.parse(key) : {};
+  }
+
+  async updateAudioTracks(bookId: string, tracks: AudioTrack[]): Promise<void> {
+    await this.formatRepository.update({ bookId, format: BookFormatType.MP3 }, { audioTracks: tracks });
   }
 
   canWriteMetadata(format: BookFormatType): boolean {

@@ -124,4 +124,45 @@ describe('BookPublicationController', () => {
     expect(response.setHeader).toHaveBeenCalledWith('Content-Range', 'bytes 2-5/10');
     expect(response.setHeader).toHaveBeenCalledWith('Content-Length', '4');
   });
+
+  it('streams the requested indexed MP3 audiobook track', async () => {
+    bookService.getDownload.mockResolvedValue({
+      book: {
+        title: 'Audio Book',
+        formats: [
+          {
+            format: BookFormatType.MP3,
+            audioTracks: [
+              { fileName: 'Audio Book.mp3', title: 'Part 1' },
+              { fileName: 'audiobook-tracks/part-2.mp3', title: 'Part 2' },
+            ],
+          },
+        ],
+      },
+      format: BookFormatType.MP3,
+      fileName: 'Audio Book.mp3',
+    });
+    storage.getFileStream.mockResolvedValue({
+      stream: Readable.from(Buffer.from('track')),
+      mimeType: 'audio/mpeg',
+      size: 5,
+    });
+    const controller = new BookPublicationController(
+      publicationService as never,
+      bookService as never,
+      storage as never,
+    );
+
+    await expect(
+      controller.downloadBook(
+        user,
+        'book-1',
+        { track: '1' },
+        { headers: {} } as never,
+        response as never,
+      ),
+    ).resolves.toBeDefined();
+
+    expect(storage.getFileStream).toHaveBeenCalledWith('books/audiobook-tracks/part-2.mp3');
+  });
 });
