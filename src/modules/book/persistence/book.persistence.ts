@@ -57,6 +57,10 @@ export class BookPersistenceService {
     return findNewArrivals(this.bookRepository, this.formatRepository, limit, offset, ownerScope);
   }
 
+  findGenres(ownerScope?: string): Promise<string[]> {
+    return findGenres(this.bookRepository, ownerScope);
+  }
+
   findFavoriteBooks(limit?: number, offset?: number, userId?: string): Promise<PaginationResult<Book[]>> {
     return findFavoriteBooks(this.bookRepository, this.formatRepository, limit, offset, userId);
   }
@@ -242,6 +246,22 @@ export async function findNewArrivals(
     total,
     nextCursor: limit && total > (offset || 0) + limit ? (offset || 0) + limit : null,
   };
+}
+
+export async function findGenres(repository: Repository<BookEntity>, ownerScope?: string): Promise<string[]> {
+  const books = await repository.find({
+    select: { genres: true },
+    where: { deletedAt: IsNull(), ...(ownerScope ? { uploadedByUserId: ownerScope } : {}) },
+  });
+
+  return [
+    ...new Set(
+      books
+        .flatMap((book) => book.genres ?? [])
+        .map((genre) => genre.trim())
+        .filter(Boolean),
+    ),
+  ].sort((a, b) => a.localeCompare(b));
 }
 
 export async function findFavoriteBooks(

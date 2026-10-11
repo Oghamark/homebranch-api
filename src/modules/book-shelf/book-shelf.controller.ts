@@ -27,8 +27,18 @@ export class BookShelfController {
 
   @Get(`:id/books`)
   @UseGuards(JwtAuthGuard)
-  getBookShelfBooksById(@CurrentUser() currentUser: Express.User, @Param('id') id: string) {
-    return this.bookShelfService.getBookShelfBooks(id, tenantScope(currentUser));
+  getBookShelfBooksById(
+    @CurrentUser() currentUser: Express.User,
+    @Param('id') id: string,
+    @Query() paginationDto: PaginatedQuery,
+  ) {
+    return this.bookShelfService.getBookShelfBooks(
+      id,
+      tenantScope(currentUser),
+      paginationDto.limit,
+      paginationDto.offset,
+      paginationDto.query,
+    );
   }
 
   @Get(`:id`)

@@ -45,7 +45,13 @@ export class BookShelfService {
     return shelf;
   }
 
-  async getBookShelfBooks(id: string, ownerScope?: string): Promise<PaginationResult<BookEntity[]>> {
+  async getBookShelfBooks(
+    id: string,
+    ownerScope?: string,
+    limit?: number,
+    offset?: number,
+    query?: string,
+  ): Promise<PaginationResult<BookEntity[]>> {
     await this.ensureBookShelfExists(id, ownerScope);
 
     const qb = this.bookRepository
@@ -57,12 +63,24 @@ export class BookShelfService {
     if (ownerScope) {
       qb.andWhere('book.uploadedByUserId = :ownerScope', { ownerScope });
     }
-    const [books, total] = await qb.orderBy('book.author', 'ASC').addOrderBy('book.title', 'ASC').getManyAndCount();
+    if (query) {
+      qb.andWhere('(LOWER(book.title) LIKE LOWER(:query) OR LOWER(book.author) LIKE LOWER(:query))', {
+        query: `%${query}%`,
+      });
+    }
+    const [books, total] = await qb
+      .orderBy('book.author', 'ASC')
+      .addOrderBy('book.title', 'ASC')
+      .take(limit)
+      .skip(offset)
+      .getManyAndCount();
 
     return {
       data: books,
+      limit,
+      offset,
       total,
-      nextCursor: null,
+      nextCursor: limit && total > (offset ?? 0) + limit ? (offset ?? 0) + limit : null,
     };
   }
 

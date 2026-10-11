@@ -94,6 +94,12 @@ export class BookController {
     return this.bookService.getFavoriteBooks({ ...paginationDto, userId: currentUser.id });
   }
 
+  @Get('genres')
+  @UseGuards(JwtAuthGuard)
+  getGenres(@CurrentUser() currentUser: Express.User) {
+    return this.bookService.getGenres(tenantScope(currentUser));
+  }
+
   @Put(':id/favorite')
   @UseGuards(JwtAuthGuard)
   async toggleFavorite(@Param('id') id: string, @CurrentUser() currentUser: Express.User) {

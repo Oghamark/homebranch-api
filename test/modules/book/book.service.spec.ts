@@ -75,6 +75,13 @@ describe('BookService', () => {
     );
   });
 
+  test('lists genres through the persistence service', async () => {
+    bookPersistenceService.findGenres = jest.fn().mockResolvedValueOnce(['Fantasy']);
+
+    await expect(service.getGenres('user-1')).resolves.toEqual(['Fantasy']);
+    expect(bookPersistenceService.findGenres).toHaveBeenCalledWith('user-1');
+  });
+
   test('gets a single book by id', async () => {
     bookPersistenceService.findBookById.mockResolvedValueOnce(mockBook);
 

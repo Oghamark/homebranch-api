@@ -57,6 +57,10 @@ export class BookService {
     return this.bookPersistenceService.findNewArrivals(limit, offset, ownerScope);
   }
 
+  async getGenres(ownerScope?: string): Promise<string[]> {
+    return this.bookPersistenceService.findGenres(ownerScope);
+  }
+
   async getFavoriteBooks({
     query,
     limit,

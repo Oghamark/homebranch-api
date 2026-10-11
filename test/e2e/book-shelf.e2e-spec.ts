@@ -82,17 +82,22 @@ describe('BookShelfController (e2e)', () => {
     expect(body.title).toBe('Test Book Shelf');
   });
 
-  it('returns bookshelf books', async () => {
+  it('returns filtered and paginated bookshelf books', async () => {
     mockBookShelfService.getBookShelfBooks.mockResolvedValueOnce({
       data: [mockBookEntity],
       total: 1,
+      limit: 10,
+      offset: 5,
       nextCursor: null,
     });
 
-    const response = await request(app.getHttpServer()).get('/book-shelves/bookshelf-123/books').expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/book-shelves/bookshelf-123/books?limit=10&offset=5&query=test')
+      .expect(200);
     const body = response.body as BookshelfListResponse;
 
     expect(body.data).toHaveLength(1);
+    expect(mockBookShelfService.getBookShelfBooks).toHaveBeenCalledWith('bookshelf-123', undefined, '10', '5', 'test');
   });
 
   it('creates a bookshelf', async () => {
