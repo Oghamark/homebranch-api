@@ -3,7 +3,7 @@ import { basename, join, extname } from 'path';
 import { CreateBookRequest } from 'src/modules/book/dto/create-book-request';
 import { CompositeMetadataGateway } from 'src/modules/book/metadata/gateways/composite-metadata.gateway';
 import { ContentHashService } from 'src/modules/book/format/content-hash.service';
-import { BookFormatProcessingService } from 'src/modules/book/format/book-format-processing.service';
+import { AudioGroupPreview, BookFormatProcessingService } from 'src/modules/book/format/book-format-processing.service';
 import { fillBookMetadataFromFileName } from 'src/modules/book/format/book-file-metadata';
 import { buildBookFormatMetadata } from 'src/modules/book/format/book-format-metadata';
 import { FileNameGenerator } from 'src/common/utils/filename-generator';
@@ -77,7 +77,10 @@ export class BookCreationService {
     let fileMetadata: BookFileMetadata = {};
 
     try {
-      fileMetadata = await this.bookFormatProcessingService.parseMetadata(incomingPath, detectedFormat);
+      fileMetadata =
+        detectedFormat === BookFormatType.MP3
+          ? (await this.bookFormatProcessingService.parseAudioMetadata(dto.filePath)).bookMetadata
+          : await this.bookFormatProcessingService.parseMetadata(incomingPath, detectedFormat);
 
       if (!enrichedDto.title && fileMetadata.title) enrichedDto.title = fileMetadata.title;
       if (!enrichedDto.author && fileMetadata.author) enrichedDto.author = fileMetadata.author;
@@ -96,10 +99,11 @@ export class BookCreationService {
       if (!enrichedDto.pageCount && fileMetadata.pageCount) enrichedDto.pageCount = fileMetadata.pageCount;
 
       if (!enrichedDto.coverImageFileName && fileMetadata.coverImageBuffer) {
-        const coverFileName = `${randomUUID()}.jpg`;
+        const coverExtension = fileMetadata.coverImageMimeType === 'image/png' ? '.png' : '.jpg';
+        const coverFileName = `${randomUUID()}${coverExtension}`;
         await this.storage.uploadFile(fileMetadata.coverImageBuffer, {
           key: `cover-images/${coverFileName}`,
-          mimeType: 'image/jpeg',
+          mimeType: fileMetadata.coverImageMimeType ?? 'image/jpeg',
         });
         enrichedDto.coverImageFileName = coverFileName;
         extractedCoverFileName = coverFileName;
@@ -247,21 +251,36 @@ export class BookCreationService {
 
   async createAudiobook(
     files: Array<{ path: string; originalname: string }>,
-    title: string,
-    author: string,
+    title: string | undefined,
+    author: string | undefined,
     uploadedByUserId: string,
   ): Promise<Book> {
     if (files.length < 2 || files.some((file) => extname(file.originalname).toLowerCase() !== '.mp3')) {
       throw new BadRequestException('An audiobook requires at least two MP3 files');
     }
-    if (!title?.trim() || !author?.trim()) {
-      throw new BadRequestException('Audiobook title and author are required');
+    let firstAudioMetadata: Awaited<ReturnType<BookFormatProcessingService['parseAudioMetadata']>> | undefined;
+    const trackTitles: Array<string | undefined> = [];
+    for (const [index, file] of files.entries()) {
+      try {
+        const audioMetadata = await this.bookFormatProcessingService.parseAudioMetadata(file.path, index > 0);
+        if (index === 0) {
+          firstAudioMetadata = audioMetadata;
+        }
+        trackTitles.push(audioMetadata.trackTitle);
+      } catch (error) {
+        this.logger.warn(`Could not parse MP3 metadata for "${file.originalname}": ${String(error)}`);
+        trackTitles.push(undefined);
+      }
     }
-
+    const firstMetadata = firstAudioMetadata?.bookMetadata;
+    const audiobookTitle = title?.trim() || firstAudioMetadata?.albumTitle?.trim();
+    if (!audiobookTitle) {
+      throw new BadRequestException('Audiobook title is required');
+    }
     const firstResult = await this.createBook({
       filePath: files[0].path,
-      title,
-      author,
+      title: audiobookTitle,
+      author: author?.trim() || firstMetadata?.author || 'Unknown Author',
       uploadedByUserId,
     });
     if ('skipped' in firstResult) {
@@ -274,7 +293,10 @@ export class BookCreationService {
     }
 
     const tracks: AudioTrack[] = [
-      { fileName: mp3Format.fileName, title: basename(files[0].originalname, extname(files[0].originalname)) },
+      {
+        fileName: mp3Format.fileName,
+        title: trackTitles[0] || basename(files[0].originalname, extname(files[0].originalname)),
+      },
     ];
     const additionalFileNames: string[] = [];
     try {
@@ -289,7 +311,10 @@ export class BookCreationService {
           mimeType: 'audio/mpeg',
         });
         additionalFileNames.push(fileName);
-        tracks.push({ fileName, title: basename(file.originalname, extname(file.originalname)) });
+        tracks.push({
+          fileName,
+          title: trackTitles[tracks.length] || basename(file.originalname, extname(file.originalname)),
+        });
       }
 
       await this.bookFormatProcessingService.updateAudioTracks(firstResult.id, tracks);
@@ -298,6 +323,19 @@ export class BookCreationService {
       await Promise.all(additionalFileNames.map((fileName) => this.storage.deleteFile(`books/${fileName}`)));
       throw error;
     }
+  }
+
+  async previewAudiobook(
+    files: Array<{ path: string; originalname: string }>,
+    relativePaths: string[],
+  ): Promise<AudioGroupPreview[]> {
+    if (!files.length || files.some((file) => extname(file.originalname).toLowerCase() !== '.mp3')) {
+      throw new BadRequestException('At least one MP3 file is required');
+    }
+    if (files.length !== relativePaths.length) {
+      throw new BadRequestException('Each MP3 file must have a corresponding relative path');
+    }
+    return this.bookFormatProcessingService.previewAudioGroups(files, relativePaths);
   }
 
   private async deleteIncomingFiles(

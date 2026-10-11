@@ -3,11 +3,11 @@ import { IsNumber, IsOptional, IsString } from 'class-validator';
 export class CreateBookRequest {
   @IsOptional()
   @IsString({ message: 'Invalid title' })
-  title: string;
+  title?: string;
 
   @IsOptional()
   @IsString({ message: 'Invalid author' })
-  author: string;
+  author?: string;
 
   @IsOptional()
   isFavorite?: boolean;

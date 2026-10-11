@@ -116,6 +116,41 @@ describe('BookCreationService', () => {
     expect(bookPersistenceService.updateBookRecord).toHaveBeenCalled();
   });
 
+  test('uses embedded MP3 metadata when creating a single-track audiobook', async () => {
+    bookFormatProcessingService.parseAudioMetadata.mockResolvedValue({
+      albumTitle: 'Tagged Album',
+      trackTitle: 'Tagged Track',
+      bookMetadata: {
+        title: 'Tagged Album',
+        author: 'Tagged Artist',
+        publishedYear: 2022,
+        genres: ['Fiction'],
+        coverImageBuffer: Buffer.from('cover'),
+        coverImageMimeType: 'image/jpeg',
+      },
+    });
+    bookPersistenceService.createBookRecord.mockResolvedValueOnce(mockBook);
+
+    await service.createBook({
+      filePath: '/tmp/uploads/untagged.mp3',
+      uploadedByUserId: 'user-123',
+    });
+
+    expect(bookFormatProcessingService.parseAudioMetadata).toHaveBeenCalledWith('/tmp/uploads/untagged.mp3');
+    expect(bookPersistenceService.createBookRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Tagged Album',
+        author: 'Tagged Artist',
+        publishedYear: 2022,
+        genres: ['Fiction'],
+      }),
+    );
+    expect(storage.uploadFile).toHaveBeenCalledWith(
+      Buffer.from('cover'),
+      expect.objectContaining({ mimeType: 'image/jpeg' }),
+    );
+  });
+
   test('returns skipped response for an exact duplicate', async () => {
     bookPersistenceService.findBookByContentHash.mockResolvedValueOnce(mockBook);
 

@@ -11,6 +11,7 @@ import {
   Post,
   Put,
   Query,
+  BadRequestException,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
@@ -54,6 +55,10 @@ class BulkAssignOwnerDto {
 class LinkBooksDto {
   @IsUUID()
   sourceBookId: string;
+}
+
+class AudiobookPreviewRequest {
+  relativePaths: string;
 }
 
 @Controller('books')
@@ -178,6 +183,41 @@ export class BookController {
       if (files.coverImage && files.coverImage.length > 0) {
         await unlink(files.coverImage[0].path);
       }
+    }
+  }
+
+  @Post('audiobook/preview')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(
+    FilesInterceptor('files', 500, {
+      storage: diskStorage({
+        destination: (_req, _file, cb) => {
+          const uploadPath = join(tmpdir(), 'uploads', 'audiobooks');
+          if (!existsSync(uploadPath)) mkdirSync(uploadPath, { recursive: true });
+          cb(null, uploadPath);
+        },
+        filename: (_req, file, cb) => cb(null, `${randomUUID()}-${basename(file.originalname)}`),
+      }),
+    }),
+  )
+  async previewAudiobook(@UploadedFiles() files: Express.Multer.File[], @Body() request: AudiobookPreviewRequest) {
+    try {
+      let relativePaths: unknown;
+      try {
+        relativePaths = JSON.parse(request.relativePaths);
+      } catch {
+        throw new BadRequestException('Invalid audiobook file paths');
+      }
+      if (!Array.isArray(relativePaths)) {
+        throw new BadRequestException('Invalid audiobook file paths');
+      }
+      const validRelativePaths = relativePaths.filter((path): path is string => typeof path === 'string');
+      if (validRelativePaths.length !== relativePaths.length) {
+        throw new BadRequestException('Invalid audiobook file paths');
+      }
+      return await this.bookCreationService.previewAudiobook(files ?? [], validRelativePaths);
+    } finally {
+      await Promise.all((files ?? []).map((file) => unlink(file.path).catch(() => {})));
     }
   }
 
