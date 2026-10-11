@@ -15,6 +15,12 @@ export interface StorageStreamResult {
   stream: Readable;
   mimeType: string;
   size: number;
+  contentRange?: string;
+}
+
+export interface StorageByteRange {
+  start: number;
+  end: number;
 }
 
 export interface StorageFileItem {

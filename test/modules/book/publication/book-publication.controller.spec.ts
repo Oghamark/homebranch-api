@@ -11,11 +11,14 @@ describe('BookPublicationController', () => {
   };
   const storage = {
     getFileStream: jest.fn(),
+    getFileStats: jest.fn(),
   };
   const user = { id: 'user-1', email: 'u@x.com', roles: ['USER'] };
   const response = {
     status: jest.fn().mockReturnThis(),
     json: jest.fn(),
+    setHeader: jest.fn(),
+    end: jest.fn(),
   };
 
   beforeEach(() => {
@@ -40,7 +43,9 @@ describe('BookPublicationController', () => {
       storage as never,
     );
 
-    await expect(controller.downloadBook(user, 'book-1', {}, response as never)).resolves.toBeDefined();
+    await expect(
+      controller.downloadBook(user, 'book-1', {}, { headers: {} } as never, response as never),
+    ).resolves.toBeDefined();
     expect(storage.getFileStream).toHaveBeenCalledWith('books/Storage Book.epub');
     expect(response.status).not.toHaveBeenCalled();
   });
@@ -54,7 +59,9 @@ describe('BookPublicationController', () => {
       storage as never,
     );
 
-    await expect(controller.downloadBook(user, 'book-1', {}, response as never)).rejects.toThrow(NotFoundException);
+    await expect(
+      controller.downloadBook(user, 'book-1', {}, { headers: {} } as never, response as never),
+    ).rejects.toThrow(NotFoundException);
     expect(bookService.assertAccess).toHaveBeenCalledWith('book-1', 'user-1');
     expect(bookService.getDownload).not.toHaveBeenCalled();
     delete process.env.CLOUD_MODE;
@@ -73,7 +80,7 @@ describe('BookPublicationController', () => {
       storage as never,
     );
 
-    await controller.downloadBook(user, 'book-1', {}, response as never);
+    await controller.downloadBook(user, 'book-1', {}, { headers: {} } as never, response as never);
 
     expect(response.status).toHaveBeenCalledWith(404);
     expect(response.json).toHaveBeenCalledWith({
@@ -81,5 +88,40 @@ describe('BookPublicationController', () => {
       error: 'BOOK_FILE_NOT_FOUND',
       message: 'Book file not found on server',
     });
+  });
+
+  it('streams requested byte ranges for audiobook seeking', async () => {
+    bookService.getDownload.mockResolvedValue({
+      book: { title: 'Audio Book' },
+      format: BookFormatType.MP3,
+      fileName: 'Audio Book.mp3',
+    });
+    storage.getFileStats.mockResolvedValue({ size: 10, mtimeMs: 0 });
+    storage.getFileStream.mockResolvedValue({
+      stream: Readable.from(Buffer.from('2345')),
+      mimeType: 'audio/mpeg',
+      size: 10,
+      contentRange: 'bytes 2-5/10',
+    });
+    const controller = new BookPublicationController(
+      publicationService as never,
+      bookService as never,
+      storage as never,
+    );
+
+    await expect(
+      controller.downloadBook(
+        user,
+        'book-1',
+        {},
+        { headers: { range: 'bytes=2-5' } } as never,
+        response as never,
+      ),
+    ).resolves.toBeDefined();
+
+    expect(storage.getFileStream).toHaveBeenCalledWith('books/Audio Book.mp3', { start: 2, end: 5 });
+    expect(response.status).toHaveBeenCalledWith(206);
+    expect(response.setHeader).toHaveBeenCalledWith('Content-Range', 'bytes 2-5/10');
+    expect(response.setHeader).toHaveBeenCalledWith('Content-Length', '4');
   });
 });

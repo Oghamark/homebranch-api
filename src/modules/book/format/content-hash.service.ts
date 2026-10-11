@@ -11,8 +11,12 @@ export class ContentHashService {
   constructor(@Inject(STORAGE_SERVICE_TOKEN) private readonly storage: IStorageService) {}
 
   async computeHash(key: string): Promise<string> {
-    const { buffer } = await this.storage.getFileBuffer(key);
-    return this.computeHashFromBuffer(buffer, key);
+    if (key.toLowerCase().endsWith('.epub')) {
+      const { buffer } = await this.storage.getFileBuffer(key);
+      return this.computeHashFromBuffer(buffer, key);
+    }
+    const { stream } = await this.storage.getFileStream(key);
+    return this.computeHashFromStream(stream);
   }
 
   async computeHashFromPath(filePath: string): Promise<string> {
@@ -48,6 +52,15 @@ export class ContentHashService {
       const hash = createHash('sha256');
       const stream = createReadStream(filePath);
       stream.on('data', (data) => hash.update(data));
+      stream.on('end', () => resolve(hash.digest('hex')));
+      stream.on('error', reject);
+    });
+  }
+
+  private computeHashFromStream(stream: NodeJS.ReadableStream): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const hash = createHash('sha256');
+      stream.on('data', (data: Buffer) => hash.update(data));
       stream.on('end', () => resolve(hash.digest('hex')));
       stream.on('error', reject);
     });

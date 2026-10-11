@@ -24,6 +24,30 @@ import { getBookFormatExtension, getBookFormatMediaType } from 'src/modules/book
 import { IStorageService, STORAGE_SERVICE_TOKEN } from 'src/modules/storage/storage.interface';
 import { StorageStreamResult } from 'src/modules/storage/storage.types';
 
+interface ByteRange {
+  start: number;
+  end: number;
+}
+
+function parseByteRange(header: string, size: number): ByteRange | undefined {
+  if (size <= 0) return undefined;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header);
+  if (!match || (!match[1] && !match[2])) return undefined;
+
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return undefined;
+    return { start: Math.max(0, size - suffixLength), end: size - 1 };
+  }
+
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : size - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start >= size || requestedEnd < start) {
+    return undefined;
+  }
+  return { start, end: Math.min(requestedEnd, size - 1) };
+}
+
 class BookFormatQueryDto {
   @IsOptional()
   format?: BookFormatType;
@@ -79,6 +103,7 @@ export class BookPublicationController {
     @CurrentUser() currentUser: Express.User,
     @Param('id') id: string,
     @Query() query: BookFormatQueryDto,
+    @Req() req: Request,
     @Res({ passthrough: true }) response: Response,
   ): Promise<StreamableFile | void> {
     await this.bookService.assertAccess(id, tenantScope(currentUser));
@@ -87,7 +112,25 @@ export class BookPublicationController {
     const safeFileName = basename(fileName);
     let storageStreamResult: StorageStreamResult;
     try {
-      storageStreamResult = await this.storage.getFileStream(`books/${safeFileName}`);
+      const fileKey = `books/${safeFileName}`;
+      const rangeHeader = req.headers.range;
+      if (rangeHeader) {
+        const { size } = await this.storage.getFileStats(fileKey);
+        const range = parseByteRange(rangeHeader, size);
+        if (!range) {
+          response.setHeader('Content-Range', `bytes */${size}`);
+          response.status(416).end();
+          return;
+        }
+        storageStreamResult = await this.storage.getFileStream(fileKey, range);
+        response.status(206);
+        response.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
+        response.setHeader('Content-Length', String(range.end - range.start + 1));
+      } else {
+        storageStreamResult = await this.storage.getFileStream(fileKey);
+        response.setHeader('Content-Length', String(storageStreamResult.size));
+      }
+      response.setHeader('Accept-Ranges', 'bytes');
     } catch (error) {
       if (!(error instanceof NotFoundException)) {
         throw error;
@@ -100,6 +143,7 @@ export class BookPublicationController {
 
     return new StreamableFile(storageStreamResult.stream, {
       type: getBookFormatMediaType(format),
+      length: req.headers.range ? undefined : storageStreamResult.size,
       disposition: `${query.inline === 'true' ? 'inline' : 'attachment'}; filename="${sanitizedTitle}${getBookFormatExtension(
         format,
       )}"`,

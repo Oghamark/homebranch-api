@@ -26,7 +26,7 @@ type MetadataWriter = {
 @Injectable()
 export class BookFormatProcessingService {
   private readonly logger = new Logger(BookFormatProcessingService.name);
-  private readonly parsers: Record<BookFormatType, MetadataParser>;
+  private readonly parsers: Partial<Record<BookFormatType, MetadataParser>>;
   private readonly metadataWriters: Partial<Record<BookFormatType, MetadataWriter>>;
 
   constructor(

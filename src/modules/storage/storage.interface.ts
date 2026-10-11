@@ -5,6 +5,7 @@ import {
   StorageFileItem,
   FileBufferResult,
   StorageFileStats,
+  StorageByteRange,
 } from './storage.types';
 
 export interface IStorageService {
@@ -29,7 +30,7 @@ export interface IStorageService {
    * Gets a readable stream of the file along with its metadata.
    * Crucial for proxying books directly to the in-browser reader.
    */
-  getFileStream(key: string): Promise<StorageStreamResult>;
+  getFileStream(key: string, range?: StorageByteRange): Promise<StorageStreamResult>;
 
   /**
    * Generates a temporary, secure URL for file access.

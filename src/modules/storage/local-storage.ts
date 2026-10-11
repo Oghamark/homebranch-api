@@ -20,6 +20,7 @@ import {
   StorageFileItem,
   FileBufferResult,
   StorageFileStats,
+  StorageByteRange,
 } from './storage.types';
 import { ConfigService } from '@nestjs/config';
 import { EnvironmentVariables } from '../../common/types/env.interface';
@@ -89,7 +90,7 @@ class LocalStorage implements IStorageService {
     }
   }
 
-  async getFileStream(key: string): Promise<StorageStreamResult> {
+  async getFileStream(key: string, range?: StorageByteRange): Promise<StorageStreamResult> {
     this.logger.log(`Getting file stream for ${key}`);
     const fullPath = this.getAbsolutePath(key);
 
@@ -98,12 +99,14 @@ class LocalStorage implements IStorageService {
     }
 
     const stats = await stat(fullPath);
-    const stream = createReadStream(fullPath);
+    const stream = createReadStream(fullPath, range ? { start: range.start, end: range.end } : undefined);
 
     // look up or estimate mime-type based on file extension if options missed it
     let mimeType = 'application/octet-stream';
     if (key.endsWith('.epub')) mimeType = 'application/epub+zip';
     if (key.endsWith('.pdf')) mimeType = 'application/pdf';
+    if (key.endsWith('.mp3')) mimeType = 'audio/mpeg';
+    if (key.endsWith('.m4b')) mimeType = 'audio/mp4';
     if (key.endsWith('.jpg') || key.endsWith('.jpeg')) mimeType = 'image/jpeg';
     if (key.endsWith('.png')) mimeType = 'image/png';
 
@@ -111,6 +114,7 @@ class LocalStorage implements IStorageService {
       stream,
       mimeType,
       size: stats.size,
+      contentRange: range ? `bytes ${range.start}-${range.end}/${stats.size}` : undefined,
     };
   }
 
