@@ -26,6 +26,12 @@ describe('LibraryScanProcessor', () => {
         size: 123,
         updatedAt: new Date('2024-01-01T00:00:00Z'),
       },
+      {
+        key: 'books/audiobook-tracks/track-2.mp3',
+        fileName: 'track-2.mp3',
+        size: 456,
+        updatedAt: new Date('2024-01-01T00:00:00Z'),
+      },
     ]);
     bookPersistenceService.findAllActiveBooks.mockResolvedValue([]);
     const processor = new LibraryScanProcessor(
@@ -46,5 +52,6 @@ describe('LibraryScanProcessor', () => {
       { fileName: 'New Book.epub', filePath: 'books/New Book.epub' },
       expect.objectContaining({ removeOnComplete: 100, removeOnFail: 50 }),
     );
+    expect(fileProcessingQueue.add).toHaveBeenCalledTimes(1);
   });
 });

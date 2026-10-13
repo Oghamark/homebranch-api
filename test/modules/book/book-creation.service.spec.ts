@@ -93,6 +93,23 @@ describe('BookCreationService', () => {
     delete process.env.CLOUD_MODE;
   });
 
+  it('cleans up an incoming upload when the demo book limit is reached', async () => {
+    process.env.CLOUD_MODE = 'true';
+    storageQuota.assertCanAddBook.mockRejectedValue(new PayloadTooLargeException('Demo book limit reached'));
+
+    await expect(
+      service.createBook({
+        title: 'New Book',
+        author: 'Test Author',
+        filePath: '/tmp/uploads/test-book.epub',
+        uploadedByUserId: 'user-1',
+      }),
+    ).rejects.toThrow(PayloadTooLargeException);
+    expect(bookPersistenceService.createBookRecord).not.toHaveBeenCalled();
+    expect(storage.deleteFile).toHaveBeenCalledWith(expect.stringContaining('incoming/'));
+    delete process.env.CLOUD_MODE;
+  });
+
   afterEach(() => {
     jest.clearAllMocks();
   });
@@ -114,6 +131,41 @@ describe('BookCreationService', () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(metadataGateway.enrichBook).toHaveBeenCalledWith(mockBook);
     expect(bookPersistenceService.updateBookRecord).toHaveBeenCalled();
+  });
+
+  test('uses embedded MP3 metadata when creating a single-track audiobook', async () => {
+    bookFormatProcessingService.parseAudioMetadata.mockResolvedValue({
+      albumTitle: 'Tagged Album',
+      trackTitle: 'Tagged Track',
+      bookMetadata: {
+        title: 'Tagged Album',
+        author: 'Tagged Artist',
+        publishedYear: 2022,
+        genres: ['Fiction'],
+        coverImageBuffer: Buffer.from('cover'),
+        coverImageMimeType: 'image/jpeg',
+      },
+    });
+    bookPersistenceService.createBookRecord.mockResolvedValueOnce(mockBook);
+
+    await service.createBook({
+      filePath: '/tmp/uploads/untagged.mp3',
+      uploadedByUserId: 'user-123',
+    });
+
+    expect(bookFormatProcessingService.parseAudioMetadata).toHaveBeenCalledWith('/tmp/uploads/untagged.mp3');
+    expect(bookPersistenceService.createBookRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Tagged Album',
+        author: 'Tagged Artist',
+        publishedYear: 2022,
+        genres: ['Fiction'],
+      }),
+    );
+    expect(storage.uploadFile).toHaveBeenCalledWith(
+      Buffer.from('cover'),
+      expect.objectContaining({ mimeType: 'image/jpeg' }),
+    );
   });
 
   test('returns skipped response for an exact duplicate', async () => {

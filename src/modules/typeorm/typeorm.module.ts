@@ -30,6 +30,9 @@ import { AddBookFormatTable1774652732886 } from 'src/migrations/1774652732886-Ad
 import { AddMetadataToBookFormat1777224804830 } from 'src/migrations/1777224804830-AddMetadataToBookFormat';
 import { BackfillLegacyBookFormats1777228301570 } from 'src/migrations/1777228301570-BackfillLegacyBookFormats';
 import { AddFileSizeToBookFormat1790000000000 } from 'src/migrations/1790000000000-AddFileSizeToBookFormat';
+import { CreateUserPreferenceTable1790000000001 } from 'src/migrations/1790000000001-CreateUserPreferenceTable';
+import { UserPreferenceEntity } from 'src/modules/kindle/user-preference.entity';
+import { AddAudioTracksToBookFormat1790000000002 } from 'src/migrations/1790000000002-AddAudioTracksToBookFormat';
 
 @Module({
   imports: [
@@ -67,6 +70,7 @@ import { AddFileSizeToBookFormat1790000000000 } from 'src/migrations/17900000000
             SettingEntity,
             UserBookFavoriteEntity,
             BookDuplicateEntity,
+            UserPreferenceEntity,
           ],
           migrations: [
             SchemaUpdate1755566512418,
@@ -89,6 +93,8 @@ import { AddFileSizeToBookFormat1790000000000 } from 'src/migrations/17900000000
             AddMetadataToBookFormat1777224804830,
             BackfillLegacyBookFormats1777228301570,
             AddFileSizeToBookFormat1790000000000,
+            CreateUserPreferenceTable1790000000001,
+            AddAudioTracksToBookFormat1790000000002,
           ],
           migrationsRun: true,
           migrationsTableName: 'migration_table',

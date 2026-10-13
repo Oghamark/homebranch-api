@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Book } from 'src/modules/book/book.model';
 import { AuthorEntity } from 'src/modules/author/author.entity';
 
@@ -14,6 +14,25 @@ interface BookSearchDoc {
 
 interface BookSummarySearchResponse {
   docs: BookSearchDoc[];
+}
+
+interface OpenLibraryCoverSearchDoc {
+  title?: string;
+  author_name?: string[];
+  first_publish_year?: number;
+  cover_i?: number;
+}
+
+interface OpenLibraryCoverSearchResponse {
+  docs?: OpenLibraryCoverSearchDoc[];
+}
+
+export interface BookCoverCandidate {
+  coverId: number;
+  title: string;
+  authors: string[];
+  year?: number;
+  thumbnailUrl: string;
 }
 
 interface OpenLibraryDescriptionObject {
@@ -161,6 +180,7 @@ export class OpenLibraryGateway {
       if (!bookDoc) {
         return null;
       }
+
       const workDetails = await this.fetchWorkDetails(bookDoc.key);
       return workDetails?.summary ?? null;
     } catch (error) {
@@ -170,6 +190,110 @@ export class OpenLibraryGateway {
       );
       return null;
     }
+  }
+
+  async searchBookCovers(title: string, author: string, query?: string): Promise<BookCoverCandidate[]> {
+    const search = new URLSearchParams({
+      limit: '20',
+      fields: 'title,author_name,first_publish_year,cover_i',
+    });
+    if (query?.trim()) {
+      search.set('q', query.trim());
+    } else {
+      search.set('title', title);
+      search.set('author', author);
+    }
+
+    const response = await fetch(`${this.baseUrl}/search.json?${search.toString()}`, {
+      headers: { 'User-Agent': this.userAgent },
+      signal: this.createAbortSignal(),
+    });
+    if (!response.ok) {
+      throw new BadGatewayException('Open Library cover search is unavailable');
+    }
+
+    const data = (await response.json()) as OpenLibraryCoverSearchResponse;
+    return (data.docs ?? [])
+      .filter(
+        (doc): doc is OpenLibraryCoverSearchDoc & { cover_i: number } =>
+          Number.isSafeInteger(doc.cover_i) && (doc.cover_i ?? 0) > 0,
+      )
+      .map((doc) => ({
+        coverId: doc.cover_i,
+        title: doc.title ?? 'Untitled',
+        authors: doc.author_name ?? [],
+        year: doc.first_publish_year,
+        thumbnailUrl: `${this.coversUrl}/b/id/${doc.cover_i}-M.jpg?default=false`,
+      }));
+  }
+
+  async fetchBookCover(coverId: number): Promise<{ buffer: Buffer; mimeType: string }> {
+    if (!Number.isSafeInteger(coverId) || coverId <= 0) {
+      throw new BadRequestException('Invalid cover selection');
+    }
+
+    let url = `${this.coversUrl}/b/id/${coverId}-L.jpg?default=false`;
+    for (let redirects = 0; redirects <= 3; redirects++) {
+      const response = await fetch(url, {
+        headers: { 'User-Agent': this.userAgent, Accept: 'image/jpeg,image/png,image/webp' },
+        redirect: 'manual',
+        signal: this.createAbortSignal(),
+      });
+
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location || redirects === 3) {
+          throw new BadGatewayException('Open Library returned an invalid cover redirect');
+        }
+        const redirectUrl = new URL(location, url);
+        const hostname = redirectUrl.hostname.toLowerCase();
+        const isTrustedHost =
+          hostname === 'covers.openlibrary.org' || hostname === 'archive.org' || hostname.endsWith('.archive.org');
+        if (redirectUrl.protocol !== 'https:' || !isTrustedHost) {
+          throw new BadGatewayException('Open Library returned an untrusted cover redirect');
+        }
+        url = redirectUrl.toString();
+        continue;
+      }
+
+      if (!response.ok) {
+        throw new BadGatewayException('The selected cover image could not be downloaded');
+      }
+
+      const mimeType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+      if (!mimeType || !['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
+        throw new BadGatewayException('The selected cover is not a supported image');
+      }
+      const contentLength = Number(response.headers.get('content-length'));
+      if (Number.isFinite(contentLength) && contentLength > 8 * 1024 * 1024) {
+        throw new BadGatewayException('The selected cover image is too large');
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new BadGatewayException('The selected cover image is empty');
+      }
+      const chunks: Uint8Array[] = [];
+      let totalSize = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalSize += value.byteLength;
+        if (totalSize > 8 * 1024 * 1024) {
+          await reader.cancel();
+          throw new BadGatewayException('The selected cover image is too large');
+        }
+        chunks.push(value);
+      }
+
+      if (!totalSize) {
+        throw new BadGatewayException('The selected cover image is empty or too large');
+      }
+      const buffer = Buffer.concat(chunks, totalSize);
+      return { buffer, mimeType };
+    }
+
+    throw new BadGatewayException('The selected cover image could not be downloaded');
   }
 
   async enrichAuthor(author: AuthorEntity): Promise<AuthorEntity> {

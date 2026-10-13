@@ -17,8 +17,11 @@ interface BookShelfRelationQueryBuilderMock {
 interface BookQueryBuilderMock {
   innerJoin: jest.Mock<BookQueryBuilderMock, [string, string, string, { shelfId: string }]>;
   where: jest.Mock<BookQueryBuilderMock, [string]>;
+  andWhere: jest.Mock<BookQueryBuilderMock, [string, Record<string, string>]>;
   orderBy: jest.Mock<BookQueryBuilderMock, [string, 'ASC' | 'DESC']>;
   addOrderBy: jest.Mock<BookQueryBuilderMock, [string, 'ASC' | 'DESC']>;
+  take: jest.Mock<BookQueryBuilderMock, [number | undefined]>;
+  skip: jest.Mock<BookQueryBuilderMock, [number | undefined]>;
   getManyAndCount: jest.Mock<Promise<[BookEntity[], number]>, []>;
 }
 
@@ -98,23 +101,33 @@ describe('BookShelfService', () => {
     await expect(service.getBookShelfById('missing')).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  test('returns bookshelf books with deleted books filtered by query', async () => {
+  test('returns filtered and paginated bookshelf books', async () => {
     bookShelfRepository.exist.mockResolvedValueOnce(true);
     const queryBuilder: BookQueryBuilderMock = {
       innerJoin: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
       addOrderBy: jest.fn().mockReturnThis(),
-      getManyAndCount: jest.fn().mockResolvedValueOnce([[mockBookEntity], 1]),
+      take: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValueOnce([[mockBookEntity], 20]),
     };
     bookRepository.createQueryBuilder.mockReturnValueOnce(queryBuilder);
 
-    const result = await service.getBookShelfBooks(mockBookShelf.id);
+    const result = await service.getBookShelfBooks(mockBookShelf.id, 'user-1', 10, 5, 'test');
 
     expect(queryBuilder.innerJoin).toHaveBeenCalledWith('book.bookShelves', 'shelf', 'shelf.id = :shelfId', {
       shelfId: mockBookShelf.id,
     });
-    expect(result).toEqual({ data: [mockBookEntity], total: 1, nextCursor: null });
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith('book.uploadedByUserId = :ownerScope', { ownerScope: 'user-1' });
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      '(LOWER(book.title) LIKE LOWER(:query) OR LOWER(book.author) LIKE LOWER(:query))',
+      { query: '%test%' },
+    );
+    expect(queryBuilder.take).toHaveBeenCalledWith(10);
+    expect(queryBuilder.skip).toHaveBeenCalledWith(5);
+    expect(result).toEqual({ data: [mockBookEntity], limit: 10, offset: 5, total: 20, nextCursor: 15 });
   });
 
   test('creates a bookshelf', async () => {

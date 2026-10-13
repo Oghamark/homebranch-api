@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
-import { IsOptional } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 import { BookFormatType } from 'src/modules/book/format/book-format-type.enum';
 import { BookPublicationService } from 'src/modules/book/publication/book-publication.service';
 import { buildExternalBaseUrl } from 'src/common/utils/external-url';
@@ -24,12 +24,40 @@ import { getBookFormatExtension, getBookFormatMediaType } from 'src/modules/book
 import { IStorageService, STORAGE_SERVICE_TOKEN } from 'src/modules/storage/storage.interface';
 import { StorageStreamResult } from 'src/modules/storage/storage.types';
 
+interface ByteRange {
+  start: number;
+  end: number;
+}
+
+function parseByteRange(header: string, size: number): ByteRange | undefined {
+  if (size <= 0) return undefined;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header);
+  if (!match || (!match[1] && !match[2])) return undefined;
+
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return undefined;
+    return { start: Math.max(0, size - suffixLength), end: size - 1 };
+  }
+
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : size - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start >= size || requestedEnd < start) {
+    return undefined;
+  }
+  return { start, end: Math.min(requestedEnd, size - 1) };
+}
+
 class BookFormatQueryDto {
   @IsOptional()
   format?: BookFormatType;
 
   @IsOptional()
   inline?: string;
+
+  @IsOptional()
+  @IsString()
+  track?: string;
 }
 
 @Controller('books')
@@ -79,15 +107,53 @@ export class BookPublicationController {
     @CurrentUser() currentUser: Express.User,
     @Param('id') id: string,
     @Query() query: BookFormatQueryDto,
+    @Req() req: Request,
     @Res({ passthrough: true }) response: Response,
   ): Promise<StreamableFile | void> {
     await this.bookService.assertAccess(id, tenantScope(currentUser));
     const { book, format, fileName } = await this.bookService.getDownload(id, query.format);
+    let selectedFileName = fileName;
+    if (query.track !== undefined) {
+      if (format !== BookFormatType.MP3 || !/^\d+$/.test(query.track)) {
+        response.status(400).json({ success: false, error: 'INVALID_AUDIO_TRACK', message: 'Invalid audio track' });
+        return;
+      }
+      const trackIndex = Number(query.track);
+      const tracks = book.formats?.find((bookFormat) => bookFormat.format === format)?.audioTracks;
+      const selectedTrack = tracks?.[trackIndex];
+      if (tracks?.length && !selectedTrack) {
+        response.status(404).json({ success: false, error: 'AUDIO_TRACK_NOT_FOUND', message: 'Audio track not found' });
+        return;
+      }
+      if (selectedTrack) selectedFileName = selectedTrack.fileName;
+      else if (trackIndex !== 0) {
+        response.status(404).json({ success: false, error: 'AUDIO_TRACK_NOT_FOUND', message: 'Audio track not found' });
+        return;
+      }
+    }
     const sanitizedTitle = book.title.replace(/[^\w\s-]/g, '').trim() || 'book';
-    const safeFileName = basename(fileName);
+    const safeFileName = selectedFileName === fileName ? basename(fileName) : selectedFileName;
     let storageStreamResult: StorageStreamResult;
     try {
-      storageStreamResult = await this.storage.getFileStream(`books/${safeFileName}`);
+      const fileKey = `books/${safeFileName}`;
+      const rangeHeader = req.headers.range;
+      if (rangeHeader) {
+        const { size } = await this.storage.getFileStats(fileKey);
+        const range = parseByteRange(rangeHeader, size);
+        if (!range) {
+          response.setHeader('Content-Range', `bytes */${size}`);
+          response.status(416).end();
+          return;
+        }
+        storageStreamResult = await this.storage.getFileStream(fileKey, range);
+        response.status(206);
+        response.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
+        response.setHeader('Content-Length', String(range.end - range.start + 1));
+      } else {
+        storageStreamResult = await this.storage.getFileStream(fileKey);
+        response.setHeader('Content-Length', String(storageStreamResult.size));
+      }
+      response.setHeader('Accept-Ranges', 'bytes');
     } catch (error) {
       if (!(error instanceof NotFoundException)) {
         throw error;
@@ -100,6 +166,7 @@ export class BookPublicationController {
 
     return new StreamableFile(storageStreamResult.stream, {
       type: getBookFormatMediaType(format),
+      length: req.headers.range ? undefined : storageStreamResult.size,
       disposition: `${query.inline === 'true' ? 'inline' : 'attachment'}; filename="${sanitizedTitle}${getBookFormatExtension(
         format,
       )}"`,

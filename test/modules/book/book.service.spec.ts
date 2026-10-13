@@ -4,6 +4,7 @@ import { Book } from 'src/modules/book/book.model';
 import { BookService } from 'src/modules/book/catalog/book.service';
 import { BookFormatType } from 'src/modules/book/format/book-format-type.enum';
 import { BookPersistenceService } from 'src/modules/book/persistence/book.persistence';
+import { IStorageService } from 'src/modules/storage/storage.interface';
 import { mockBook, mockBookFavorite } from 'test/mocks/bookMocks';
 
 describe('BookService', () => {
@@ -11,6 +12,8 @@ describe('BookService', () => {
   let bookPersistenceService: jest.Mocked<BookPersistenceService>;
   let metadataGateway: { enrichBook: jest.Mock };
   let summaryGateway: { fetchSummary: jest.Mock };
+  let openLibraryGateway: { searchBookCovers: jest.Mock; fetchBookCover: jest.Mock };
+  let storage: jest.Mocked<Pick<IStorageService, 'uploadFile'>>;
 
   beforeEach(() => {
     bookPersistenceService = {
@@ -26,8 +29,16 @@ describe('BookService', () => {
     } as unknown as jest.Mocked<BookPersistenceService>;
     metadataGateway = { enrichBook: jest.fn() };
     summaryGateway = { fetchSummary: jest.fn() };
+    openLibraryGateway = { searchBookCovers: jest.fn(), fetchBookCover: jest.fn() };
+    storage = { uploadFile: jest.fn() };
 
-    service = new BookService(bookPersistenceService, metadataGateway as never, summaryGateway as never);
+    service = new BookService(
+      bookPersistenceService,
+      metadataGateway as never,
+      summaryGateway as never,
+      openLibraryGateway as never,
+      storage as never,
+    );
   });
 
   afterEach(() => {
@@ -62,6 +73,13 @@ describe('BookService', () => {
     await expect(service.getFavoriteBooks({ userId: 'user-1', limit: 20, offset: 0 })).resolves.toEqual(
       paginationResult,
     );
+  });
+
+  test('lists genres through the persistence service', async () => {
+    bookPersistenceService.findGenres = jest.fn().mockResolvedValueOnce(['Fantasy']);
+
+    await expect(service.getGenres('user-1')).resolves.toEqual(['Fantasy']);
+    expect(bookPersistenceService.findGenres).toHaveBeenCalledWith('user-1');
   });
 
   test('gets a single book by id', async () => {
@@ -106,6 +124,36 @@ describe('BookService', () => {
 
     await expect(service.fetchBookMetadata(mockBook.id)).resolves.toEqual(enrichedBook);
     expect(metadataGateway.enrichBook).toHaveBeenCalledWith(mockBook);
+  });
+
+  test('searches Open Library for covers using the book metadata', async () => {
+    const covers = [{ coverId: 123, title: 'Test Book', authors: ['Test Author'], thumbnailUrl: 'https://covers' }];
+    bookPersistenceService.findBookById.mockResolvedValueOnce(mockBook);
+    openLibraryGateway.searchBookCovers.mockResolvedValueOnce(covers);
+
+    await expect(service.searchBookCovers(mockBook.id, 'alternate search')).resolves.toEqual(covers);
+    expect(openLibraryGateway.searchBookCovers).toHaveBeenCalledWith(
+      mockBook.title,
+      mockBook.author,
+      'alternate search',
+    );
+  });
+
+  test('stores a selected cover and updates the book record', async () => {
+    const coverBuffer = Buffer.from('image');
+    bookPersistenceService.findBookById.mockResolvedValueOnce(mockBook);
+    openLibraryGateway.fetchBookCover.mockResolvedValueOnce({ buffer: coverBuffer, mimeType: 'image/png' });
+    storage.uploadFile.mockResolvedValueOnce({ key: 'cover-images/test.png', url: '' });
+    bookPersistenceService.updateBookRecord.mockImplementationOnce((_id, updatedBook) => Promise.resolve(updatedBook));
+
+    const updatedBook = await service.selectBookCover(mockBook.id, 123);
+
+    expect(storage.uploadFile).toHaveBeenCalledTimes(1);
+    const [, uploadOptions] = storage.uploadFile.mock.calls[0];
+    expect(uploadOptions.key).toMatch(/^cover-images\/.+\.png$/);
+    expect(uploadOptions.mimeType).toBe('image/png');
+    expect(updatedBook.coverImageFileName).toMatch(/\.png$/);
+    expect(bookPersistenceService.updateBookRecord).toHaveBeenCalledWith(mockBook.id, updatedBook);
   });
 
   test('returns the existing book when no summary is found', async () => {

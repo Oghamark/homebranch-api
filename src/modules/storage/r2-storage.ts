@@ -7,6 +7,7 @@ import {
   StorageFileItem,
   FileBufferResult,
   StorageFileStats,
+  StorageByteRange,
 } from './storage.types';
 import {
   S3Client,
@@ -106,10 +107,11 @@ export class R2Storage implements IStorageService {
     await this.s3.send(deleteCommand);
   }
 
-  async getFileStream(key: string): Promise<StorageStreamResult> {
+  async getFileStream(key: string, range?: StorageByteRange): Promise<StorageStreamResult> {
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: key,
+      ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
     });
     const response = await this.s3.send(command);
 
@@ -120,7 +122,10 @@ export class R2Storage implements IStorageService {
     return {
       stream: response.Body as Readable,
       mimeType: response.ContentType ?? 'application/octet-stream',
-      size: response.ContentLength ?? 0,
+      size: range
+        ? Number(response.ContentRange?.split('/').at(-1) ?? response.ContentLength ?? 0)
+        : (response.ContentLength ?? 0),
+      contentRange: response.ContentRange,
     };
   }
 

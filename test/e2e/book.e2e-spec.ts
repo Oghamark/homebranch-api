@@ -19,6 +19,7 @@ describe('BookController (e2e)', () => {
 
   const mockBookService = {
     getBooks: jest.fn(),
+    getGenres: jest.fn(),
     getFavoriteBooks: jest.fn(),
     getBookById: jest.fn(),
     toggleFavorite: jest.fn(),
@@ -104,6 +105,15 @@ describe('BookController (e2e)', () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     expect(response.body.total).toBe(1);
     expect(mockBookService.getFavoriteBooks).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-123' }));
+  });
+
+  test('lists genres before the book id route', async () => {
+    mockBookService.getGenres.mockResolvedValueOnce(['Fantasy', 'Science Fiction']);
+
+    const response = await request(app.getHttpServer()).get('/books/genres').expect(200);
+
+    expect(response.body).toEqual(['Fantasy', 'Science Fiction']);
+    expect(mockBookService.getGenres).toHaveBeenCalledWith(undefined);
   });
 
   test('toggles a favorite book with a plain response payload', async () => {

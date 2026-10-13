@@ -47,7 +47,7 @@ export class FileWatcherService implements OnModuleInit, OnModuleDestroy {
         stabilityThreshold: FileWatcherService.STABILITY_DELAY_MS,
         pollInterval: 500,
       },
-      ignored: [/(^|[/\\])\../, /\.tmp-/], // Ignore dotfiles and temp files
+      ignored: [/(^|[/\\])\../, /\.tmp-/, /[/\\]audiobook-tracks[/\\]/], // Ignore dotfiles, temporary files, and audiobook tracks
     });
 
     this.watcher.on('add', (filePath: string) => void this.onFileAdded(filePath));

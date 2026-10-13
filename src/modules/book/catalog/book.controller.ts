@@ -11,6 +11,7 @@ import {
   Post,
   Put,
   Query,
+  BadRequestException,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
@@ -23,14 +24,15 @@ import { BookMutationService } from 'src/modules/book/catalog/book-mutation.serv
 import { BookService } from 'src/modules/book/catalog/book.service';
 import { UpdateBookDto } from 'src/modules/book/dto/update-book.dto';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { randomUUID } from 'crypto';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/guards/roles.decorator';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
-import { IsOptional, IsUUID } from 'class-validator';
+import { IsInt, IsOptional, IsUUID, Min } from 'class-validator';
 import { tmpdir } from 'os';
 import { existsSync, mkdirSync } from 'fs';
 import { unlink } from 'fs-extra';
@@ -53,6 +55,16 @@ class BulkAssignOwnerDto {
 class LinkBooksDto {
   @IsUUID()
   sourceBookId: string;
+}
+
+class AudiobookPreviewRequest {
+  relativePaths: string;
+}
+
+class SelectBookCoverRequest {
+  @IsInt()
+  @Min(1)
+  coverId: number;
 }
 
 @Controller('books')
@@ -82,12 +94,40 @@ export class BookController {
     return this.bookService.getFavoriteBooks({ ...paginationDto, userId: currentUser.id });
   }
 
+  @Get('genres')
+  @UseGuards(JwtAuthGuard)
+  getGenres(@CurrentUser() currentUser: Express.User) {
+    return this.bookService.getGenres(tenantScope(currentUser));
+  }
+
   @Put(':id/favorite')
   @UseGuards(JwtAuthGuard)
   async toggleFavorite(@Param('id') id: string, @CurrentUser() currentUser: Express.User) {
     this.logger.log('Favorite book request received');
     await this.bookService.assertAccess(id, tenantScope(currentUser));
     return this.bookService.toggleFavorite(currentUser.id, id);
+  }
+
+  @Get(':id/covers')
+  @UseGuards(JwtAuthGuard)
+  async searchBookCovers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('query') query: string | undefined,
+    @CurrentUser() currentUser: Express.User,
+  ) {
+    await this.bookService.assertAccess(id, tenantScope(currentUser));
+    return this.bookService.searchBookCovers(id, query);
+  }
+
+  @Post(':id/cover')
+  @UseGuards(JwtAuthGuard)
+  async selectBookCover(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() request: SelectBookCoverRequest,
+    @CurrentUser() currentUser: Express.User,
+  ) {
+    await this.bookService.assertAccess(id, tenantScope(currentUser));
+    return this.bookService.selectBookCover(id, request.coverId);
   }
 
   @Get(`:id`)
@@ -171,12 +211,73 @@ export class BookController {
       this.logger.error('Failed to upload book:', error);
       throw error;
     } finally {
-      if (files.file && files.file.length > 0) {
-        await unlink(files.file[0].path);
+      // Storage moves the temp files, so they may already be gone
+      await Promise.all(
+        [files?.file?.[0]?.path, files?.coverImage?.[0]?.path]
+          .filter((path): path is string => !!path)
+          .map((path) => unlink(path).catch(() => {})),
+      );
+    }
+  }
+
+  @Post('audiobook/preview')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(
+    FilesInterceptor('files', 500, {
+      storage: diskStorage({
+        destination: (_req, _file, cb) => {
+          const uploadPath = join(tmpdir(), 'uploads', 'audiobooks');
+          if (!existsSync(uploadPath)) mkdirSync(uploadPath, { recursive: true });
+          cb(null, uploadPath);
+        },
+        filename: (_req, file, cb) => cb(null, `${randomUUID()}-${basename(file.originalname)}`),
+      }),
+    }),
+  )
+  async previewAudiobook(@UploadedFiles() files: Express.Multer.File[], @Body() request: AudiobookPreviewRequest) {
+    try {
+      let relativePaths: unknown;
+      try {
+        relativePaths = JSON.parse(request.relativePaths);
+      } catch {
+        throw new BadRequestException('Invalid audiobook file paths');
       }
-      if (files.coverImage && files.coverImage.length > 0) {
-        await unlink(files.coverImage[0].path);
+      if (!Array.isArray(relativePaths)) {
+        throw new BadRequestException('Invalid audiobook file paths');
       }
+      const validRelativePaths = relativePaths.filter((path): path is string => typeof path === 'string');
+      if (validRelativePaths.length !== relativePaths.length) {
+        throw new BadRequestException('Invalid audiobook file paths');
+      }
+      return await this.bookCreationService.previewAudiobook(files ?? [], validRelativePaths);
+    } finally {
+      await Promise.all((files ?? []).map((file) => unlink(file.path).catch(() => {})));
+    }
+  }
+
+  @Post('audiobook')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(
+    FilesInterceptor('files', 500, {
+      storage: diskStorage({
+        destination: (_req, _file, cb) => {
+          const uploadPath = join(tmpdir(), 'uploads', 'audiobooks');
+          if (!existsSync(uploadPath)) mkdirSync(uploadPath, { recursive: true });
+          cb(null, uploadPath);
+        },
+        filename: (_req, file, cb) => cb(null, `${randomUUID()}-${basename(file.originalname)}`),
+      }),
+    }),
+  )
+  async createAudiobook(
+    @CurrentUser() currentUser: Express.User,
+    @UploadedFiles() files: Express.Multer.File[],
+    @Body() request: CreateBookRequest,
+  ) {
+    try {
+      return await this.bookCreationService.createAudiobook(files ?? [], request.title, request.author, currentUser.id);
+    } finally {
+      await Promise.all((files ?? []).map((file) => unlink(file.path).catch(() => {})));
     }
   }
 

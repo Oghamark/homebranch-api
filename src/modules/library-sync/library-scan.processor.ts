@@ -52,7 +52,12 @@ export class LibraryScanProcessor extends WorkerHost {
       files = await this.storage
         .listFiles('books', true)
         .then((storageFileItems) =>
-          storageFileItems.filter((f) => isSupportedBookFile(f.fileName) && !f.fileName.startsWith('.')),
+          storageFileItems.filter(
+            (f) =>
+              isSupportedBookFile(f.fileName) &&
+              !f.fileName.startsWith('.') &&
+              !f.key.startsWith('books/audiobook-tracks/'),
+          ),
         );
     } catch (error) {
       this.logger.error(`Cannot read books directory: ${String(error)}`);

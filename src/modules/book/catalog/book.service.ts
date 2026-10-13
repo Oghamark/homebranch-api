@@ -1,12 +1,15 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PaginationResult } from 'src/common/core/pagination_result';
+import { OpenLibraryGateway, type BookCoverCandidate } from 'src/common/gateways/open-library.gateway';
 import { CompositeMetadataGateway } from 'src/modules/book/metadata/gateways/composite-metadata.gateway';
 import { CompositeSummaryGateway } from 'src/modules/book/metadata/gateways/composite-summary.gateway';
 import { GetBooksRequest } from 'src/modules/book/dto/get-books-request';
-import { Book } from 'src/modules/book/book.model';
+import { Book, copyBook } from 'src/modules/book/book.model';
 import { BookFormatType } from 'src/modules/book/format/book-format-type.enum';
 import { getDefaultBookFormatType, getRequestedBookFormatFromBook } from 'src/modules/book/format/book-format';
 import { BookPersistenceService } from 'src/modules/book/persistence/book.persistence';
+import { IStorageService, STORAGE_SERVICE_TOKEN } from '../../storage/storage.interface';
 
 export interface DownloadBookResult {
   book: Book;
@@ -20,6 +23,8 @@ export class BookService {
     private readonly bookPersistenceService: BookPersistenceService,
     private readonly metadataGateway: CompositeMetadataGateway,
     private readonly summaryGateway: CompositeSummaryGateway,
+    private readonly openLibraryGateway: OpenLibraryGateway,
+    @Inject(STORAGE_SERVICE_TOKEN) private readonly storage: IStorageService,
   ) {}
 
   async getBooks({
@@ -50,6 +55,10 @@ export class BookService {
 
   async getNewArrivals(limit?: number, offset?: number, ownerScope?: string): Promise<PaginationResult<Book[]>> {
     return this.bookPersistenceService.findNewArrivals(limit, offset, ownerScope);
+  }
+
+  async getGenres(ownerScope?: string): Promise<string[]> {
+    return this.bookPersistenceService.findGenres(ownerScope);
   }
 
   async getFavoriteBooks({
@@ -128,6 +137,27 @@ export class BookService {
     const enrichedBook = await this.metadataGateway.enrichBook(book);
 
     return this.bookPersistenceService.updateBookRecord(id, enrichedBook);
+  }
+
+  async searchBookCovers(id: string, query?: string): Promise<BookCoverCandidate[]> {
+    const book = await this.bookPersistenceService.findBookById(id);
+    return this.openLibraryGateway.searchBookCovers(book.title, book.author, query);
+  }
+
+  async selectBookCover(id: string, coverId: number): Promise<Book> {
+    const book = await this.bookPersistenceService.findBookById(id);
+    const { buffer, mimeType } = await this.openLibraryGateway.fetchBookCover(coverId);
+    const extension = mimeType === 'image/png' ? '.png' : mimeType === 'image/webp' ? '.webp' : '.jpg';
+    const coverImageFileName = `${randomUUID()}${extension}`;
+    await this.storage.uploadFile(buffer, {
+      key: `cover-images/${coverImageFileName}`,
+      mimeType,
+    });
+
+    return this.bookPersistenceService.updateBookRecord(
+      id,
+      copyBook(book, { coverImageFileName, metadataUpdatedAt: new Date() }),
+    );
   }
 
   async fetchBookSummary(id: string): Promise<Book> {

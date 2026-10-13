@@ -31,6 +31,24 @@ const BOOK_FORMAT_DEFINITIONS: BookFormatDefinition[] = [
     supportsContentEntries: false,
     supportsMetadataWrite: false,
   },
+  {
+    format: BookFormatType.MP3,
+    extension: '.mp3',
+    mediaType: 'audio/mpeg',
+    preferenceOrder: 3,
+    supportsManifest: false,
+    supportsContentEntries: false,
+    supportsMetadataWrite: false,
+  },
+  {
+    format: BookFormatType.M4B,
+    extension: '.m4b',
+    mediaType: 'audio/mp4',
+    preferenceOrder: 2,
+    supportsManifest: false,
+    supportsContentEntries: false,
+    supportsMetadataWrite: false,
+  },
 ];
 
 const BOOK_FORMAT_DEFINITION_MAP = new Map<BookFormatType, BookFormatDefinition>(
