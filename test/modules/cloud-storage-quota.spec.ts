@@ -9,9 +9,11 @@ describe('StorageQuotaService', () => {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       select: jest.fn(),
-      getRawOne: jest.fn(async () => ({
-        total: String(selected.startsWith('COUNT') ? usedBooks : usedBytes),
-      })),
+      getRawOne: jest.fn(() =>
+        Promise.resolve({
+          total: String(selected.startsWith('COUNT') ? usedBooks : usedBytes),
+        }),
+      ),
     };
     qb.select.mockImplementation((selection: string) => {
       selected = selection;
