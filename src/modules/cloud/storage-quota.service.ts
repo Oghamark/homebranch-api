@@ -37,6 +37,24 @@ export class StorageQuotaService {
     };
   }
 
+  async getUsageForUsers(userIds: string[]): Promise<Record<string, { usedBytes: number; usedBooks: number }>> {
+    const result: Record<string, { usedBytes: number; usedBooks: number }> = {};
+    for (const id of userIds) result[id] = { usedBytes: 0, usedBooks: 0 };
+    if (userIds.length === 0) return result;
+    const rows = await this.formats
+      .createQueryBuilder('format')
+      .innerJoin('format.book', 'book')
+      .where('book.uploadedByUserId IN (:...userIds)', { userIds })
+      .andWhere('book.deletedAt IS NULL')
+      .select('book.uploadedByUserId', 'userId')
+      .addSelect('COALESCE(SUM(format.fileSize), 0)', 'bytes')
+      .addSelect('COUNT(DISTINCT book.id)', 'books')
+      .groupBy('book.uploadedByUserId')
+      .getRawMany<{ userId: string; bytes: string; books: string }>();
+    for (const row of rows) result[row.userId] = { usedBytes: Number(row.bytes), usedBooks: Number(row.books) };
+    return result;
+  }
+
   async assertCanStore(userId: string, incomingBytes: number): Promise<void> {
     const used = await this.getUsedBytes(userId);
     const { quotaBytes } = await this.entitlements.getLimits(userId);

@@ -43,4 +43,21 @@ describe('StorageQuotaService', () => {
       maxBooks: 5,
     });
   });
+  it('reports batch usage and zeroes users without books', async () => {
+    const qb = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([{ userId: 'a', bytes: '10', books: '2' }]),
+    };
+    const service = new StorageQuotaService({ createQueryBuilder: () => qb } as never, {} as never);
+    await expect(service.getUsageForUsers(['a', 'b'])).resolves.toEqual({
+      a: { usedBytes: 10, usedBooks: 2 },
+      b: { usedBytes: 0, usedBooks: 0 },
+    });
+    await expect(service.getUsageForUsers([])).resolves.toEqual({});
+  });
 });
