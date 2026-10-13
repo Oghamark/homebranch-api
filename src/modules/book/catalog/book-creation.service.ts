@@ -200,6 +200,15 @@ export class BookCreationService {
       return persistedBook;
     }
 
+    if (ownerScope) {
+      try {
+        await this.storageQuota.assertCanAddBook(ownerScope);
+      } catch (error) {
+        await this.deleteIncomingFiles(tempFileName, enrichedDto.coverImageFileName, extractedCoverFileName);
+        throw error;
+      }
+    }
+
     const book = new Book(
       randomUUID(),
       enrichedDto.title,

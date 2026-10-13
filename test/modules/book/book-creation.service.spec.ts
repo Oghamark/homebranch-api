@@ -93,6 +93,23 @@ describe('BookCreationService', () => {
     delete process.env.CLOUD_MODE;
   });
 
+  it('cleans up an incoming upload when the demo book limit is reached', async () => {
+    process.env.CLOUD_MODE = 'true';
+    storageQuota.assertCanAddBook.mockRejectedValue(new PayloadTooLargeException('Demo book limit reached'));
+
+    await expect(
+      service.createBook({
+        title: 'New Book',
+        author: 'Test Author',
+        filePath: '/tmp/uploads/test-book.epub',
+        uploadedByUserId: 'user-1',
+      }),
+    ).rejects.toThrow(PayloadTooLargeException);
+    expect(bookPersistenceService.createBookRecord).not.toHaveBeenCalled();
+    expect(storage.deleteFile).toHaveBeenCalledWith(expect.stringContaining('incoming/'));
+    delete process.env.CLOUD_MODE;
+  });
+
   afterEach(() => {
     jest.clearAllMocks();
   });
