@@ -112,7 +112,7 @@ export class BookClubsService {
   async removeMember(clubId: string, actorUserId: string, targetUserId: string): Promise<void> {
     return this.dataSource.transaction(async (manager) => {
       const memberRepository = manager.getRepository(BookClubMemberEntity);
-      const { club, actor } = await this.getVisibleClub(manager, clubId, actorUserId);
+      const { club, actor } = await this.getVisibleClub(manager, clubId, actorUserId, true);
       const isSelfLeave = actorUserId === targetUserId;
       if (!isSelfLeave && actor?.role !== BookClubRole.OWNER && actor?.role !== BookClubRole.MODERATOR) {
         throw new ForbiddenException('Club membership management permission required');
@@ -137,7 +137,7 @@ export class BookClubsService {
     return this.dataSource.transaction(async (manager) => {
       const clubRepository = manager.getRepository(BookClubEntity);
       const memberRepository = manager.getRepository(BookClubMemberEntity);
-      const { club, actor } = await this.getVisibleClub(manager, clubId, actorUserId);
+      const { club, actor } = await this.getVisibleClub(manager, clubId, actorUserId, true);
       if (actorUserId === newOwnerUserId) throw new BadRequestException('New owner must be another club member');
       if (club.status !== BookClubStatus.ACTIVE) {
         throw new ForbiddenException('Archived book clubs cannot be changed');
@@ -239,8 +239,13 @@ export class BookClubsService {
     manager: EntityManager,
     clubId: string,
     actorUserId: string,
+    lockClub = false,
   ): Promise<{ club: BookClubEntity; actor?: BookClubMemberEntity | null }> {
-    const club = await manager.getRepository(BookClubEntity).findOne({ where: { id: clubId } });
+    const clubRepository = manager.getRepository(BookClubEntity);
+    const club = await clubRepository.findOne({
+      where: { id: clubId },
+      ...(lockClub ? { lock: { mode: 'pessimistic_write' } } : {}),
+    });
     if (!club) throw new NotFoundException('Book club not found');
 
     const actor = await manager.getRepository(BookClubMemberEntity).findOne({ where: { clubId, userId: actorUserId } });
