@@ -11,6 +11,7 @@ describe('BookClubsService', () => {
     save: jest.fn((value: unknown): Promise<unknown> => Promise.resolve(value)),
     findOne: jest.fn<Promise<unknown>, [unknown]>(),
     find: jest.fn<Promise<unknown[]>, [unknown]>(),
+    delete: jest.fn<Promise<unknown>, [unknown]>(),
   };
   const memberRepository = {
     create: jest.fn((value: unknown): unknown => value),
@@ -45,6 +46,7 @@ describe('BookClubsService', () => {
     memberRepository.findOne.mockReset().mockResolvedValue(undefined);
     workRepository.findOne.mockReset().mockResolvedValue(undefined);
     clubRepository.find.mockReset().mockResolvedValue([]);
+    clubRepository.delete.mockReset().mockResolvedValue({ affected: 1 });
     memberRepository.find.mockReset().mockResolvedValue([]);
     workRepository.find.mockReset().mockResolvedValue([]);
     service = new BookClubsService(dataSource);
@@ -82,9 +84,7 @@ describe('BookClubsService', () => {
       visibility: BookClubVisibility.PRIVATE,
       status: BookClubStatus.ACTIVE,
     });
-    await expect(service.joinClub('private-club', 'reader-2')).rejects.toThrow(
-      'Private clubs require owner-managed membership',
-    );
+    await expect(service.joinClub('private-club', 'reader-2')).rejects.toThrow('Book club not found');
   });
 
   it('lists instance-visible clubs and only the private clubs the caller belongs to', async () => {
@@ -241,6 +241,66 @@ describe('BookClubsService', () => {
 
     await expect(service.getClub('club-1', 'admin-user')).rejects.toThrow('Book club not found');
     expect(memberRepository.findOne).toHaveBeenCalledWith({ where: { clubId: 'club-1', userId: 'admin-user' } });
+  });
+
+  it('returns not found before looking up a target member in a private club', async () => {
+    const club = {
+      id: 'private-club',
+      ownerUserId: 'owner-1',
+      visibility: BookClubVisibility.PRIVATE,
+      status: BookClubStatus.ACTIVE,
+    };
+    const privateMember = { clubId: 'private-club', userId: 'secret-user', role: BookClubRole.MEMBER };
+    const targetUserId = 'secret-user';
+    const attempts: Array<() => Promise<unknown>> = [
+      () => service.joinClub(club.id, 'outsider'),
+      () => service.getClub(club.id, 'outsider'),
+      () => service.updateClub(club.id, 'outsider', { name: 'Changed' }),
+      () => service.addMember(club.id, 'outsider', { userId: targetUserId }),
+      () => service.updateMemberRole(club.id, 'outsider', targetUserId, BookClubRole.MODERATOR),
+      () => service.removeMember(club.id, 'outsider', targetUserId),
+      () => service.transferOwnership(club.id, 'outsider', targetUserId),
+      () => service.archiveClub(club.id, 'outsider'),
+    ];
+
+    for (const attempt of attempts) {
+      jest.clearAllMocks();
+      clubRepository.findOne.mockResolvedValue(club);
+      memberRepository.findOne.mockImplementation((criteria: unknown) => {
+        const userId = (criteria as { where: { userId: string } }).where.userId;
+        return Promise.resolve(userId === targetUserId ? privateMember : undefined);
+      });
+
+      await expect(attempt()).rejects.toMatchObject({ status: 404 });
+      expect(memberRepository.findOne).not.toHaveBeenCalledWith({ where: { clubId: club.id, userId: targetUserId } });
+      expect(workRepository.findOne).not.toHaveBeenCalled();
+    }
+  });
+
+  it('deletes a club only for its owner and relies on the club foreign-key cascades', async () => {
+    const club = {
+      id: 'private-club',
+      ownerUserId: 'owner-1',
+      visibility: BookClubVisibility.PRIVATE,
+      status: BookClubStatus.ACTIVE,
+    };
+    const deleteClub = (service as unknown as { deleteClub: (clubId: string, userId: string) => Promise<void> })
+      .deleteClub;
+    clubRepository.findOne.mockResolvedValue(club);
+    memberRepository.findOne.mockResolvedValue(undefined);
+
+    await expect(deleteClub.call(service, club.id, 'outsider')).rejects.toMatchObject({ status: 404 });
+    expect(clubRepository.delete).not.toHaveBeenCalled();
+
+    memberRepository.findOne.mockResolvedValue({ clubId: club.id, userId: 'member-1', role: BookClubRole.MEMBER });
+    await expect(deleteClub.call(service, club.id, 'member-1')).rejects.toMatchObject({ status: 403 });
+    expect(clubRepository.delete).not.toHaveBeenCalled();
+
+    memberRepository.findOne.mockResolvedValue({ clubId: club.id, userId: 'owner-1', role: BookClubRole.OWNER });
+    await deleteClub.call(service, club.id, 'owner-1');
+
+    expect(clubRepository.delete).toHaveBeenCalledWith({ id: club.id });
+    expect(memberRepository.delete).not.toHaveBeenCalled();
   });
 
   it('creates an owner membership and a logical selected work independent of book files', async () => {

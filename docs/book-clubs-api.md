@@ -23,14 +23,17 @@ All routes require the existing JWT authentication guard. The authenticated acco
 | `DELETE` | `/book-clubs/:clubId/members/:userId` | Owner removes members/moderators; moderator removes members only; a member can leave. Owner must transfer ownership first. |
 | `POST` | `/book-clubs/:clubId/transfer-ownership` | Owner transfers ownership to an existing member using `{ "newOwnerUserId": "..." }`; prior owner becomes a member. |
 | `POST` | `/book-clubs/:clubId/archive` | Owner archives the club. Archived clubs are omitted from lists and cannot be joined or modified. |
+| `DELETE` | `/book-clubs/:clubId` | Owner permanently deletes the club; member and selected-work rows are removed by the club foreign-key cascades. |
 
-Private-club reads by non-members return `404` so existence and selected-work metadata are not disclosed. Permission failures return `403`; invalid DTOs return `400`; duplicate membership returns `409`; unauthenticated calls return `401`.
+Club and member route parameters (`clubId`, `userId`) must be valid UUIDs; malformed values return `400`.
+
+Private-club reads and mutations by non-members return the same `404 Book club not found` response so club existence, membership, and selected-work metadata are not disclosed. For target-member mutations, actor visibility/authorization is checked before looking up the target account's membership. Permission failures for visible clubs return `403`; invalid DTOs or malformed UUIDs return `400`; duplicate membership returns `409`; unauthenticated calls return `401`.
 
 Membership assignment accepts an account ID but does not validate it against a user directory: this backend has no local user entity or user-directory contract. Callers must supply an account from this same instance. The route creates membership directly; it does not send an invitation or contact another instance.
 
 ## Deliberate exclusions
 
-This core does not implement club deletion, invitation tokens/notifications, shared book-file access, cross-member copy resolution, schedules, reading progress, progress sharing, discussion, or Cloud-vs-self-hosted copy authorization. The nullable personal-copy pointer is not exposed or writable through these endpoints. In particular, no club role authorizes access to another member's books. Add a separately reviewed contract and authorization tests before any copy-access feature.
+This core does not implement invitation tokens/notifications, shared book-file access, cross-member copy resolution, schedules, reading progress, progress sharing, discussion, or Cloud-vs-self-hosted copy authorization. The nullable personal-copy pointer is not exposed or writable through these endpoints. Deleting a club permanently deletes only its club, membership, and selected-work records using the existing foreign-key cascades; it does not delete members' personal catalog books. In particular, no club role authorizes access to another member's books. Add a separately reviewed contract and authorization tests before any copy-access feature.
 
 ## Migration and operations
 
