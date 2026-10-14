@@ -161,7 +161,7 @@ export class BookClubsService {
   async addMember(clubId: string, actorUserId: string, input: AddBookClubMemberInput): Promise<BookClubMemberEntity> {
     return this.dataSource.transaction(async (manager) => {
       const memberRepository = manager.getRepository(BookClubMemberEntity);
-      const { club, actor } = await this.getVisibleClub(manager, clubId, actorUserId);
+      const { club, actor } = await this.getVisibleClub(manager, clubId, actorUserId, true);
       if (club.status !== BookClubStatus.ACTIVE) {
         throw new ForbiddenException('Archived book clubs cannot be changed');
       }

@@ -184,6 +184,38 @@ describe('BookClubsService', () => {
     );
   });
 
+  it('does not let a demoted owner add a member using permissions read before a concurrent ownership transfer', async () => {
+    const club = { id: 'club-1', ownerUserId: 'owner-1', status: BookClubStatus.ACTIVE };
+    let actorRole = BookClubRole.OWNER;
+    let transferCommitted = false;
+    clubRepository.findOne.mockImplementation((options: unknown) => {
+      const lockMode = (options as { lock?: { mode: string } }).lock?.mode;
+      if (lockMode === 'pessimistic_write') {
+        actorRole = BookClubRole.MEMBER;
+        club.ownerUserId = 'owner-2';
+        transferCommitted = true;
+      }
+      return Promise.resolve(club);
+    });
+    memberRepository.findOne.mockImplementation((criteria: unknown) => {
+      const userId = (criteria as { where: { userId: string } }).where.userId;
+      if (userId !== 'owner-1') return Promise.resolve(undefined);
+
+      const actor = { clubId: 'club-1', userId, role: actorRole };
+      if (!transferCommitted) {
+        actorRole = BookClubRole.MEMBER;
+        club.ownerUserId = 'owner-2';
+        transferCommitted = true;
+      }
+      return Promise.resolve(actor);
+    });
+
+    await expect(
+      service.addMember('club-1', 'owner-1', { userId: 'new-moderator', role: BookClubRole.MODERATOR }),
+    ).rejects.toThrow('Club membership management permission required');
+    expect(memberRepository.save).not.toHaveBeenCalled();
+  });
+
   it('lets owners appoint a moderator while a moderator cannot grant another moderator role', async () => {
     clubRepository.findOne.mockResolvedValue({
       id: 'club-1',
