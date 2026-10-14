@@ -532,15 +532,31 @@ export class BookClubsService {
         const workRepository = manager.getRepository(BookClubWorkEntity);
         const work = await workRepository.findOne({ where: { clubId } });
         if (!work) throw new NotFoundException('Book club not found');
-        Object.assign(work, {
+        const selectedWork = {
+          ...work,
           ...input.selectedWork,
           isbn: input.selectedWork.isbn ?? null,
           externalWorkId: input.selectedWork.externalWorkId ?? null,
           editionId: input.selectedWork.editionId ?? null,
           series: input.selectedWork.series ?? null,
           seriesPosition: input.selectedWork.seriesPosition ?? null,
+        };
+        const workReplaced = !sameWorkMatchMetadata(work, selectedWork);
+        Object.assign(work, {
+          ...selectedWork,
         });
         await workRepository.save(work);
+        if (workReplaced) {
+          await manager.getRepository(BookClubReadingCopyEntity).update(
+            { workId: work.id },
+            {
+              bookId: null,
+              source: BookClubReadingCopySource.NONE,
+              associationMethod: null,
+              confidence: null,
+            },
+          );
+        }
       }
       return club;
     });

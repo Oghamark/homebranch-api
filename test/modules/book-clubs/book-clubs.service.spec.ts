@@ -29,6 +29,7 @@ describe('BookClubsService', () => {
   };
   const readingCopyRepository = {
     upsert: jest.fn<Promise<unknown>, [unknown, unknown]>(),
+    update: jest.fn<Promise<unknown>, [unknown, unknown]>(),
   };
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
@@ -51,6 +52,7 @@ describe('BookClubsService', () => {
     memberRepository.findOne.mockReset().mockResolvedValue(undefined);
     workRepository.findOne.mockReset().mockResolvedValue(undefined);
     readingCopyRepository.upsert.mockReset().mockResolvedValue({});
+    readingCopyRepository.update.mockReset().mockResolvedValue({});
     clubRepository.find.mockReset().mockResolvedValue([]);
     clubRepository.delete.mockReset().mockResolvedValue({ affected: 1 });
     memberRepository.find.mockReset().mockResolvedValue([]);
@@ -259,6 +261,7 @@ describe('BookClubsService', () => {
 
     await service.updateClub('club-1', 'owner-1', { name: 'New name' });
     expect(clubRepository.save).toHaveBeenCalledWith(expect.objectContaining({ name: 'New name' }));
+    expect(readingCopyRepository.update).not.toHaveBeenCalled();
 
     memberRepository.findOne.mockResolvedValue({
       clubId: 'club-1',

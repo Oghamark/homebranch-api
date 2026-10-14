@@ -7,6 +7,7 @@ import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
 import {
+  BookClubAssociationMethod,
   BookClubReadingCopySource,
   BookClubRole,
   BookClubStatus,
@@ -24,14 +25,15 @@ describe('Book club reading-copy associations', () => {
   const membership = { id: 'member-association-id', clubId, userId, role: BookClubRole.MEMBER };
   const work = { id: workId, clubId, title: 'Selected logical work', author: 'Author' };
 
-  const clubRepository = { findOne: jest.fn() };
+  const clubRepository = { findOne: jest.fn(), save: jest.fn() };
   const memberRepository = { findOne: jest.fn() };
-  const workRepository = { findOne: jest.fn() };
+  const workRepository = { findOne: jest.fn(), save: jest.fn() };
   const readingCopyRepository = {
     create: jest.fn((value: unknown) => value),
     findOne: jest.fn(),
     save: jest.fn(),
     upsert: jest.fn(),
+    update: jest.fn(),
   };
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
@@ -58,10 +60,13 @@ describe('Book club reading-copy associations', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     readingCopyRepository.upsert.mockReset().mockResolvedValue(undefined);
+    readingCopyRepository.update.mockReset().mockResolvedValue(undefined);
     delete process.env.CLOUD_MODE;
     clubRepository.findOne.mockResolvedValue(club);
+    clubRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
     memberRepository.findOne.mockReset().mockResolvedValue(membership);
     workRepository.findOne.mockResolvedValue(work);
+    workRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
     readingCopyRepository.findOne.mockReset().mockResolvedValue(undefined);
     readingCopyRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
     bookService.getBookById.mockResolvedValue({
@@ -347,6 +352,110 @@ describe('Book club reading-copy associations', () => {
     } finally {
       delete process.env.CLOUD_MODE;
     }
+  });
+
+  it('resets every member association and its match evidence when the selected logical work is replaced', async () => {
+    const owner = { id: 'owner-membership', clubId, userId, role: BookClubRole.OWNER };
+    const otherMember = { id: 'other-membership', clubId, userId: 'other-reader', role: BookClubRole.MEMBER };
+    const clubWithOwner = {
+      ...club,
+      ownerUserId: userId,
+      name: 'Reading group',
+      status: BookClubStatus.ACTIVE,
+    };
+    let selectedWork = { ...work, title: 'Original title', author: 'Original author', externalWorkId: 'work-old' };
+    const storedAssociations: Array<{
+      id: string;
+      memberId: string;
+      workId: string;
+      bookId: string | null;
+      source: BookClubReadingCopySource;
+      associationMethod: BookClubAssociationMethod | null;
+      confidence: number | null;
+    }> = [];
+    let associationId = 0;
+
+    clubRepository.findOne.mockResolvedValue(clubWithOwner);
+    memberRepository.findOne.mockImplementation(({ where }: { where: { userId: string } }) =>
+      Promise.resolve(where.userId === userId ? owner : otherMember),
+    );
+    workRepository.findOne.mockImplementation(() => Promise.resolve(selectedWork));
+    workRepository.save.mockImplementation((value: unknown) => {
+      selectedWork = value as typeof selectedWork;
+      return Promise.resolve(value);
+    });
+    readingCopyRepository.upsert.mockImplementation((value: unknown) => {
+      const association = value as Omit<(typeof storedAssociations)[number], 'id'>;
+      const existingIndex = storedAssociations.findIndex(
+        (stored) => stored.memberId === association.memberId && stored.workId === association.workId,
+      );
+      if (existingIndex === -1) storedAssociations.push({ ...association, id: `association-${++associationId}` });
+      else storedAssociations[existingIndex] = { ...storedAssociations[existingIndex], ...association };
+      return Promise.resolve(undefined);
+    });
+    readingCopyRepository.findOne.mockImplementation(({ where }: { where: { memberId: string; workId: string } }) =>
+      Promise.resolve(
+        storedAssociations.find((stored) => stored.memberId === where.memberId && stored.workId === where.workId),
+      ),
+    );
+    readingCopyRepository.update.mockImplementation(
+      ({ workId: targetWorkId }: { workId: string }, changes: Partial<(typeof storedAssociations)[number]>) => {
+        for (const association of storedAssociations) {
+          if (association.workId === targetWorkId) Object.assign(association, changes);
+        }
+        return Promise.resolve(undefined);
+      },
+    );
+
+    await service.setReadingCopy(
+      clubId,
+      workId,
+      userId,
+      { source: BookClubReadingCopySource.PERSONAL, bookId },
+      { associationMethod: BookClubAssociationMethod.IDENTIFIER, confidence: 1 },
+    );
+    await service.setReadingCopy(
+      clubId,
+      workId,
+      otherMember.userId,
+      { source: BookClubReadingCopySource.PERSONAL, bookId },
+      { associationMethod: BookClubAssociationMethod.METADATA_CANDIDATE, confidence: 0.75 },
+    );
+
+    await service.updateClub(clubId, userId, {
+      selectedWork: { title: 'Replacement title', author: 'Replacement author', externalWorkId: 'work-new' },
+    });
+
+    expect(storedAssociations).toEqual([
+      expect.objectContaining({
+        id: 'association-1',
+        memberId: owner.id,
+        workId,
+        bookId: null,
+        source: BookClubReadingCopySource.NONE,
+        associationMethod: null,
+        confidence: null,
+      }),
+      expect.objectContaining({
+        id: 'association-2',
+        memberId: otherMember.id,
+        workId,
+        bookId: null,
+        source: BookClubReadingCopySource.NONE,
+        associationMethod: null,
+        confidence: null,
+      }),
+    ]);
+
+    bookService.getBookById.mockClear();
+    await expect(service.getReadingCopy(clubId, workId, otherMember.userId)).resolves.toEqual({
+      clubId,
+      workId,
+      source: BookClubReadingCopySource.NONE,
+      available: false,
+      book: null,
+    });
+    expect(bookService.getBookById).not.toHaveBeenCalled();
   });
 
   it('rejects shared-copy selection in Cloud without looking up the submitted book ID', async () => {
