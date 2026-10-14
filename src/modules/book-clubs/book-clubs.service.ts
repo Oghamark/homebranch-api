@@ -68,7 +68,7 @@ export class BookClubsService {
     userId: string,
     input: SetBookClubReadingCopyInput,
   ): Promise<BookClubReadingCopyState> {
-    return this.dataSource.transaction(async (manager) => {
+    await this.dataSource.transaction(async (manager) => {
       const { club, actor } = await this.getVisibleClub(manager, clubId, userId);
       if (!actor) throw new ForbiddenException('Book club membership required');
       if (club.status !== BookClubStatus.ACTIVE) {
@@ -83,9 +83,20 @@ export class BookClubsService {
       if (isCloudMode() && input.source === BookClubReadingCopySource.SHARED) {
         throw new ForbiddenException('Shared book copies are not available in Cloud');
       }
-      if (!this.bookService) throw new Error('Book access service is not configured');
+    });
 
-      const book = await this.bookService.getBookById(input.bookId, userId, isCloudMode() ? userId : undefined);
+    if (!this.bookService) throw new Error('Book access service is not configured');
+    const book = await this.bookService.getBookById(input.bookId, userId, isCloudMode() ? userId : undefined);
+
+    return this.dataSource.transaction(async (manager) => {
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+      if (club.status !== BookClubStatus.ACTIVE) {
+        throw new ForbiddenException('Archived book clubs cannot be changed');
+      }
+      const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!work) throw new NotFoundException('Book club work not found');
+
       const repository = manager.getRepository(BookClubReadingCopyEntity);
       await repository.upsert({ memberId: actor.id, workId, bookId: input.bookId, source: input.source }, [
         'memberId',
@@ -102,7 +113,7 @@ export class BookClubsService {
   }
 
   async getReadingCopy(clubId: string, workId: string, userId: string): Promise<BookClubReadingCopyState> {
-    return this.dataSource.transaction(async (manager) => {
+    const context = await this.dataSource.transaction(async (manager) => {
       const { actor } = await this.getVisibleClub(manager, clubId, userId);
       if (!actor) throw new ForbiddenException('Book club membership required');
 
@@ -112,47 +123,58 @@ export class BookClubsService {
         .getRepository(BookClubReadingCopyEntity)
         .findOne({ where: { memberId: actor.id, workId } });
       if (!association || association.source === BookClubReadingCopySource.NONE) {
-        return { clubId, workId, source: BookClubReadingCopySource.NONE, available: false, book: null };
+        return {
+          kind: 'state' as const,
+          state: { clubId, workId, source: BookClubReadingCopySource.NONE, available: false, book: null },
+        };
       }
       if (!association.bookId) {
         return {
-          clubId,
-          workId,
-          source: isCloudMode() ? BookClubReadingCopySource.NONE : association.source,
-          available: false,
-          book: null,
+          kind: 'state' as const,
+          state: {
+            clubId,
+            workId,
+            source: isCloudMode() ? BookClubReadingCopySource.NONE : association.source,
+            available: false,
+            book: null,
+          },
         };
       }
       if (isCloudMode() && association.source === BookClubReadingCopySource.SHARED) {
-        return { clubId, workId, source: BookClubReadingCopySource.NONE, available: false, book: null };
-      }
-      if (!this.bookService) throw new Error('Book access service is not configured');
-
-      try {
-        const book = await this.bookService.getBookById(association.bookId, userId, isCloudMode() ? userId : undefined);
         return {
-          clubId,
-          workId,
-          source: association.source,
-          available: true,
-          book: { id: book.id, title: book.title, author: book.author },
-        };
-      } catch (error) {
-        if (!(error instanceof NotFoundException) && !(error instanceof ForbiddenException)) throw error;
-        return {
-          clubId,
-          workId,
-          source: isCloudMode() ? BookClubReadingCopySource.NONE : association.source,
-          available: false,
-          book: null,
+          kind: 'state' as const,
+          state: { clubId, workId, source: BookClubReadingCopySource.NONE, available: false, book: null },
         };
       }
+      return { kind: 'association' as const, association, bookId: association.bookId };
     });
+    if (context.kind === 'state') return context.state;
+    if (!this.bookService) throw new Error('Book access service is not configured');
+
+    try {
+      const book = await this.bookService.getBookById(context.bookId, userId, isCloudMode() ? userId : undefined);
+      return {
+        clubId,
+        workId,
+        source: context.association.source,
+        available: true,
+        book: { id: book.id, title: book.title, author: book.author },
+      };
+    } catch (error) {
+      if (!(error instanceof NotFoundException) && !(error instanceof ForbiddenException)) throw error;
+      return {
+        clubId,
+        workId,
+        source: isCloudMode() ? BookClubReadingCopySource.NONE : context.association.source,
+        available: false,
+        book: null,
+      };
+    }
   }
 
   async clearReadingCopy(clubId: string, workId: string, userId: string): Promise<void> {
     return this.dataSource.transaction(async (manager) => {
-      const { club, actor } = await this.getVisibleClub(manager, clubId, userId);
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
       if (!actor) throw new ForbiddenException('Book club membership required');
       if (club.status !== BookClubStatus.ACTIVE) {
         throw new ForbiddenException('Archived book clubs cannot be changed');

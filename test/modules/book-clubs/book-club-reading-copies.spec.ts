@@ -41,8 +41,16 @@ describe('Book club reading-copy associations', () => {
     [BookEntity, {}],
   ]);
   const manager = { getRepository: (entity: unknown) => repositories.get(entity) } as unknown as EntityManager;
+  let transactionDepth = 0;
   const dataSource = {
-    transaction: async (callback: (manager: EntityManager) => Promise<unknown>) => callback(manager),
+    transaction: async (callback: (manager: EntityManager) => Promise<unknown>) => {
+      transactionDepth += 1;
+      try {
+        return await callback(manager);
+      } finally {
+        transactionDepth -= 1;
+      }
+    },
   } as unknown as DataSource;
   const bookService = { getBookById: jest.fn() } as unknown as jest.Mocked<BookService>;
   let service: BookClubsService;
@@ -113,6 +121,52 @@ describe('Book club reading-copy associations', () => {
       book: { id: bookId, title: 'Available local edition', author: 'Author' },
     });
     expect(JSON.stringify(result)).not.toMatch(/summary|uploadedByUserId|formats|annotations|position|history/i);
+  });
+
+  it('looks up books only after private-club visibility and membership checks finish outside the transaction', async () => {
+    clubRepository.findOne.mockResolvedValue({ ...club, visibility: BookClubVisibility.PRIVATE });
+    bookService.getBookById.mockImplementation((...args) => {
+      expect(transactionDepth).toBe(0);
+      return {
+        id: args[0],
+        title: 'Available local edition',
+        author: 'Author',
+      } as never;
+    });
+
+    await service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.PERSONAL, bookId });
+    expect(clubRepository.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+      bookService.getBookById.mock.invocationCallOrder[0],
+    );
+    expect(memberRepository.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+      bookService.getBookById.mock.invocationCallOrder[0],
+    );
+
+    jest.clearAllMocks();
+    readingCopyRepository.findOne.mockResolvedValue({ memberId: membership.id, workId, bookId, source: 'personal' });
+    await service.getReadingCopy(clubId, workId, userId);
+    expect(clubRepository.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+      bookService.getBookById.mock.invocationCallOrder[0],
+    );
+    expect(memberRepository.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+      bookService.getBookById.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('rechecks membership under a club lock before writing after book authorization', async () => {
+    clubRepository.findOne.mockResolvedValue({ ...club, visibility: BookClubVisibility.PRIVATE });
+    memberRepository.findOne.mockResolvedValueOnce(membership).mockResolvedValueOnce(undefined);
+
+    await expect(
+      service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.PERSONAL, bookId }),
+    ).rejects.toMatchObject({ status: 404 });
+
+    expect(bookService.getBookById).toHaveBeenCalledWith(bookId, userId, undefined);
+    expect(clubRepository.findOne).toHaveBeenNthCalledWith(2, {
+      where: { id: clubId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(readingCopyRepository.upsert).not.toHaveBeenCalled();
   });
 
   it('lets a self-hosted member switch a work association from shared to personal', async () => {
@@ -339,6 +393,10 @@ describe('Book club reading-copy associations', () => {
 
     await service.clearReadingCopy(clubId, workId, userId);
 
+    expect(clubRepository.findOne).toHaveBeenCalledWith({
+      where: { id: clubId },
+      lock: { mode: 'pessimistic_write' },
+    });
     expect(readingCopyRepository.upsert).toHaveBeenCalledWith(
       { memberId: membership.id, workId, bookId: null, source: 'none' },
       ['memberId', 'workId'],
