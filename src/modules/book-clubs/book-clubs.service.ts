@@ -397,26 +397,52 @@ export class BookClubsService {
 
     if (!isCloudMode() || candidates.length === 0) return { work: currentWork, candidates };
 
-    const liveBooks = await this.dataSource.transaction(async (manager) => {
+    const {
+      work: lockedWork,
+      books: liveBooks,
+      matchesCurrentWork,
+    } = await this.dataSource.transaction(async (manager) => {
       const { actor } = await this.getVisibleClub(manager, clubId, userId);
       if (!actor) throw new ForbiddenException('Book club membership required');
 
-      return this.getCloudMatchableBooks(
+      const selectedWork = await manager.getRepository(BookClubWorkEntity).findOne({
+        where: { id: workId, clubId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!selectedWork) throw new NotFoundException('Book club work not found');
+      if (!sameWorkMatchMetadata(currentWork, selectedWork)) {
+        return { work: selectedWork, books: [], matchesCurrentWork: false };
+      }
+
+      const books = await this.getCloudMatchableBooks(
         manager,
         candidates.map((candidate) => candidate.bookId),
         userId,
       );
+      return { work: selectedWork, books, matchesCurrentWork: true };
     });
+    if (!matchesCurrentWork) return { work: lockedWork, candidates: [] };
+
     const liveBooksById = new Map(liveBooks.map((book) => [book.id, book]));
-    const liveMatchesById = new Map(matchBookClubWork(currentWork, liveBooks).map((match) => [match.bookId, match]));
-    const authorizedCandidates = candidates.flatMap((candidate) => {
-      const book = liveBooksById.get(candidate.bookId);
-      const match = liveMatchesById.get(candidate.bookId);
-      return book && match
-        ? [{ ...candidate, method: match.method, confidence: match.confidence, title: book.title, author: book.author }]
-        : [];
-    });
-    return { work: currentWork, candidates: authorizedCandidates };
+    const liveMatchesById = new Map(matchBookClubWork(lockedWork, liveBooks).map((match) => [match.bookId, match]));
+    const authorizedCandidates = candidates
+      .flatMap((candidate) => {
+        const book = liveBooksById.get(candidate.bookId);
+        const match = liveMatchesById.get(candidate.bookId);
+        return book && match
+          ? [
+              {
+                ...candidate,
+                method: match.method,
+                confidence: match.confidence,
+                title: book.title,
+                author: book.author,
+              },
+            ]
+          : [];
+      })
+      .sort((left, right) => right.confidence - left.confidence || left.bookId.localeCompare(right.bookId));
+    return { work: lockedWork, candidates: authorizedCandidates };
   }
 
   async confirmWorkMatch(

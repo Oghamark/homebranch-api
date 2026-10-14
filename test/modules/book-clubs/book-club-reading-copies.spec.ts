@@ -346,6 +346,86 @@ describe('Book club reading-copy associations', () => {
     expect(formatQuery.lock.mode).toBe('pessimistic_write');
   });
 
+  it('returns no Cloud candidates when the selected work changes before the final candidate lock', async () => {
+    process.env.CLOUD_MODE = 'true';
+    const originalWork = { ...work, title: 'Original selected work', externalWorkId: 'original-work-id' };
+    let selectedWork = originalWork;
+    let membershipReadCount = 0;
+    workRepository.findOne.mockImplementation(() => Promise.resolve(selectedWork));
+    memberRepository.findOne.mockImplementation(() => {
+      membershipReadCount += 1;
+      if (membershipReadCount === 3) {
+        selectedWork = { ...originalWork, title: 'Replacement selected work', externalWorkId: 'replacement-work-id' };
+      }
+      return Promise.resolve(membership);
+    });
+    bookService.getMatchingBooks.mockResolvedValue([
+      {
+        id: bookId,
+        title: originalWork.title,
+        author: originalWork.author,
+        externalWorkId: originalWork.externalWorkId,
+      } as never,
+    ]);
+    bookRepository.find.mockResolvedValue([
+      {
+        id: bookId,
+        title: originalWork.title,
+        author: originalWork.author,
+        externalWorkId: originalWork.externalWorkId,
+        uploadedByUserId: userId,
+        deletedAt: null,
+      },
+    ]);
+
+    await expect(service.getWorkMatchCandidates(clubId, workId, userId)).resolves.toEqual([]);
+
+    expect(bookRepository.find).not.toHaveBeenCalled();
+    expect(workRepository.findOne).toHaveBeenCalledTimes(3);
+    expect(workRepository.findOne).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        where: { id: workId, clubId },
+        lock: { mode: 'pessimistic_write' },
+      }),
+    );
+  });
+
+  it('sorts Cloud candidates by evidence recomputed from the final locked metadata', async () => {
+    process.env.CLOUD_MODE = 'true';
+    const matchingWork = { ...work, isbn: '9780000000000' };
+    const initialBooks = [
+      { id: 'book-a', title: matchingWork.title, author: matchingWork.author },
+      { id: 'book-z', title: matchingWork.title, author: matchingWork.author },
+    ];
+    workRepository.findOne.mockResolvedValue(matchingWork);
+    bookService.getMatchingBooks.mockResolvedValue(initialBooks as never);
+    bookRepository.find.mockResolvedValue([
+      {
+        id: 'book-a',
+        title: matchingWork.title,
+        author: matchingWork.author,
+        uploadedByUserId: userId,
+        deletedAt: null,
+      },
+      {
+        id: 'book-z',
+        title: matchingWork.title,
+        author: matchingWork.author,
+        isbn: matchingWork.isbn,
+        uploadedByUserId: userId,
+        deletedAt: null,
+      },
+    ]);
+
+    const result = await service.getWorkMatchCandidates(clubId, workId, userId);
+
+    expect(result.map(({ bookId, method, confidence }) => ({ bookId, method, confidence }))).toEqual([
+      { bookId: 'book-z', method: 'identifier', confidence: 1 },
+      { bookId: 'book-a', method: 'metadata_candidate', confidence: 0.75 },
+    ]);
+  });
+
   it('does not return match candidates if private-club membership is revoked during lookup', async () => {
     clubRepository.findOne.mockResolvedValue({ ...club, visibility: BookClubVisibility.PRIVATE });
     memberRepository.findOne.mockResolvedValueOnce(membership).mockResolvedValueOnce(undefined);
