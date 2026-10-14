@@ -77,7 +77,7 @@ export class BookClubsService {
   async archiveClub(clubId: string, userId: string): Promise<BookClubEntity> {
     return this.dataSource.transaction(async (manager) => {
       const clubRepository = manager.getRepository(BookClubEntity);
-      const { club, actor } = await this.getVisibleClub(manager, clubId, userId);
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
       if (club.ownerUserId !== userId || actor?.role !== BookClubRole.OWNER) {
         throw new ForbiddenException('Only the club owner can perform this action');
       }
@@ -185,7 +185,7 @@ export class BookClubsService {
   async updateClub(clubId: string, userId: string, input: UpdateBookClubInput): Promise<BookClubEntity> {
     return this.dataSource.transaction(async (manager) => {
       const clubRepository = manager.getRepository(BookClubEntity);
-      const { club, actor } = await this.getVisibleClub(manager, clubId, userId);
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
       if (club.ownerUserId !== userId || actor?.role !== BookClubRole.OWNER) {
         throw new ForbiddenException('Only the club owner can perform this action');
       }
@@ -227,7 +227,7 @@ export class BookClubsService {
   async deleteClub(clubId: string, actorUserId: string): Promise<void> {
     return this.dataSource.transaction(async (manager) => {
       const clubRepository = manager.getRepository(BookClubEntity);
-      const { club, actor } = await this.getVisibleClub(manager, clubId, actorUserId);
+      const { club, actor } = await this.getVisibleClub(manager, clubId, actorUserId, true);
       if (club.ownerUserId !== actorUserId || actor?.role !== BookClubRole.OWNER) {
         throw new ForbiddenException('Only the club owner can perform this action');
       }
