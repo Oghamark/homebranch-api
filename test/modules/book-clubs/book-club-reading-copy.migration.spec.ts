@@ -1,5 +1,8 @@
 import { QueryRunner, getMetadataArgsStorage } from 'typeorm';
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
+import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
+import { BookEntity } from 'src/modules/book/book.entity';
+import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
 import { CreateBookClubReadingCopy1790000000004 } from 'src/migrations/1790000000004-CreateBookClubReadingCopy';
 
 describe('CreateBookClubReadingCopy migration', () => {
@@ -30,5 +33,19 @@ describe('CreateBookClubReadingCopy migration', () => {
     await new CreateBookClubReadingCopy1790000000004().down(queryRunner);
 
     expect(query).toHaveBeenCalledWith('DROP TABLE "book_club_reading_copy_entity"');
+  });
+
+  it('stores match evidence on the association and stable work identifiers on local metadata', () => {
+    const columnsFor = (target: object) =>
+      getMetadataArgsStorage()
+        .columns.filter((column) => column.target === target)
+        .map((column) => column.propertyName);
+
+    expect(columnsFor(BookClubReadingCopyEntity)).toEqual(expect.arrayContaining(['associationMethod', 'confidence']));
+    expect(columnsFor(BookClubWorkEntity)).toEqual(
+      expect.arrayContaining(['isbn', 'externalWorkId', 'editionId', 'series', 'seriesPosition']),
+    );
+    expect(columnsFor(BookEntity)).toEqual(expect.arrayContaining(['externalWorkId', 'editionId']));
+    expect(columnsFor(BookFormatEntity)).toEqual(expect.arrayContaining(['externalWorkId', 'editionId']));
   });
 });

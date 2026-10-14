@@ -90,6 +90,9 @@ export class BookCreationService {
         enrichedDto.publishedYear = String(fileMetadata.publishedYear);
       }
       if (!enrichedDto.isbn && fileMetadata.isbn) enrichedDto.isbn = fileMetadata.isbn;
+      if (!enrichedDto.externalWorkId && fileMetadata.externalWorkId)
+        enrichedDto.externalWorkId = fileMetadata.externalWorkId;
+      if (!enrichedDto.editionId && fileMetadata.editionId) enrichedDto.editionId = fileMetadata.editionId;
       if (fileMetadata.summary) parsedSummary = fileMetadata.summary;
       if (!enrichedDto.genres?.length && fileMetadata.genres?.length) enrichedDto.genres = fileMetadata.genres;
       if (!enrichedDto.series && fileMetadata.series) enrichedDto.series = fileMetadata.series;
@@ -170,6 +173,8 @@ export class BookCreationService {
       fileContentHash: contentHash,
       fileSize,
       ...buildBookFormatMetadata(fileMetadata, originalFileName, enrichedDto.coverImageFileName),
+      externalWorkId: enrichedDto.externalWorkId ?? fileMetadata.externalWorkId,
+      editionId: enrichedDto.editionId ?? fileMetadata.editionId,
     });
 
     if (preferredBook) {
@@ -186,6 +191,8 @@ export class BookCreationService {
         series: preferredBook.series ?? enrichedDto.series,
         seriesPosition: preferredBook.seriesPosition ?? enrichedDto.seriesPosition,
         isbn: preferredBook.isbn ?? enrichedDto.isbn,
+        externalWorkId: preferredBook.externalWorkId ?? enrichedDto.externalWorkId,
+        editionId: preferredBook.editionId ?? enrichedDto.editionId,
         pageCount: preferredBook.pageCount ?? enrichedDto.pageCount,
         publisher: preferredBook.publisher ?? enrichedDto.publisher,
         language: preferredBook.language ?? enrichedDto.language,
@@ -237,6 +244,8 @@ export class BookCreationService {
       contentHash,
       undefined,
       [newFormat],
+      enrichedDto.externalWorkId,
+      enrichedDto.editionId,
     );
 
     const createdBook = await this.bookPersistenceService.createBookRecord(book);

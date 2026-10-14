@@ -19,3 +19,9 @@ export enum BookClubReadingCopySource {
   SHARED = 'shared',
   PERSONAL = 'personal',
 }
+
+export enum BookClubAssociationMethod {
+  IDENTIFIER = 'identifier',
+  METADATA_CANDIDATE = 'metadata_candidate',
+  MANUAL_CONFIRMATION = 'manual_confirmation',
+}

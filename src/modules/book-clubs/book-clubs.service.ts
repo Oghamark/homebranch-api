@@ -9,25 +9,39 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
-import { DataSource, EntityManager, In } from 'typeorm';
+import { DataSource, EntityManager, In, IsNull } from 'typeorm';
 import { isCloudMode } from 'src/common/utils/cloud';
+import { BookEntity } from 'src/modules/book/book.entity';
+import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
 import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
 import {
+  BookClubAssociationMethod,
   BookClubReadingCopySource,
   BookClubRole,
   BookClubStatus,
   BookClubVisibility,
 } from 'src/modules/book-clubs/book-club.types';
 import { BookService } from 'src/modules/book/catalog/book.service';
+import { matchBookClubWork } from 'src/modules/book-clubs/book-club-work-matcher';
+
+export interface BookClubWorkInput {
+  title: string;
+  author: string;
+  isbn?: string;
+  externalWorkId?: string;
+  editionId?: string;
+  series?: string;
+  seriesPosition?: number;
+}
 
 export interface CreateBookClubInput {
   name: string;
   visibility: BookClubVisibility;
   description?: string;
-  selectedWork: { title: string; author: string };
+  selectedWork: BookClubWorkInput;
 }
 
 export interface AddBookClubMemberInput {
@@ -39,7 +53,7 @@ export interface UpdateBookClubInput {
   name?: string;
   description?: string | null;
   visibility?: BookClubVisibility;
-  selectedWork?: { title: string; author: string };
+  selectedWork?: BookClubWorkInput;
 }
 
 export interface SetBookClubReadingCopyInput {
@@ -53,6 +67,17 @@ export interface BookClubReadingCopyState {
   source: BookClubReadingCopySource;
   available: boolean;
   book: { id: string; title: string; author: string } | null;
+  associationMethod?: BookClubAssociationMethod | null;
+  confidence?: number | null;
+}
+
+export interface BookClubWorkMatchCandidate {
+  bookId: string;
+  title: string;
+  author: string;
+  method: BookClubAssociationMethod.IDENTIFIER | BookClubAssociationMethod.METADATA_CANDIDATE;
+  confidence: number;
+  confirmationRequired: true;
 }
 
 @Injectable()
@@ -67,6 +92,11 @@ export class BookClubsService {
     workId: string,
     userId: string,
     input: SetBookClubReadingCopyInput,
+    evidence: { associationMethod: BookClubAssociationMethod; confidence: number } = {
+      associationMethod: BookClubAssociationMethod.MANUAL_CONFIRMATION,
+      confidence: 1,
+    },
+    workMatchSnapshot?: BookClubWorkEntity,
   ): Promise<BookClubReadingCopyState> {
     await this.dataSource.transaction(async (manager) => {
       const { club, actor } = await this.getVisibleClub(manager, clubId, userId);
@@ -97,17 +127,91 @@ export class BookClubsService {
       const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
       if (!work) throw new NotFoundException('Book club work not found');
 
+      let associationEvidence = evidence;
+      if (workMatchSnapshot) {
+        if (!sameWorkMatchMetadata(workMatchSnapshot, work)) {
+          throw new BadRequestException('Selected work changed; refresh match candidates before confirming');
+        }
+        if (!isCloudMode()) {
+          const currentMatch = matchBookClubWork(work, [book]).find((match) => match.bookId === book.id);
+          if (!currentMatch) {
+            throw new BadRequestException('Book is no longer a match candidate; use manual association instead');
+          }
+          associationEvidence = {
+            associationMethod: currentMatch.method,
+            confidence: currentMatch.confidence,
+          };
+        }
+      }
+
+      let responseBook = book;
+      if (isCloudMode()) {
+        const authorizedBook = await manager.getRepository(BookEntity).findOne({
+          select: {
+            id: true,
+            title: true,
+            author: true,
+            isbn: true,
+            externalWorkId: true,
+            editionId: true,
+            series: true,
+            seriesPosition: true,
+          },
+          where: { id: input.bookId, uploadedByUserId: userId, deletedAt: IsNull() },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!authorizedBook) throw new NotFoundException('Book not found');
+        responseBook = authorizedBook;
+
+        if (workMatchSnapshot) {
+          authorizedBook.formats = await manager.getRepository(BookFormatEntity).find({
+            select: {
+              id: true,
+              bookId: true,
+              title: true,
+              author: true,
+              isbn: true,
+              externalWorkId: true,
+              editionId: true,
+              series: true,
+              seriesPosition: true,
+            },
+            where: { bookId: input.bookId },
+            lock: { mode: 'pessimistic_write' },
+          });
+          const currentMatch = matchBookClubWork(work, [authorizedBook]).find(
+            (match) => match.bookId === authorizedBook.id,
+          );
+          if (!currentMatch) {
+            throw new BadRequestException('Book is no longer a match candidate; use manual association instead');
+          }
+          associationEvidence = {
+            associationMethod: currentMatch.method,
+            confidence: currentMatch.confidence,
+          };
+        }
+      }
+
       const repository = manager.getRepository(BookClubReadingCopyEntity);
-      await repository.upsert({ memberId: actor.id, workId, bookId: input.bookId, source: input.source }, [
-        'memberId',
-        'workId',
-      ]);
+      await repository.upsert(
+        {
+          memberId: actor.id,
+          workId,
+          bookId: input.bookId,
+          source: input.source,
+          associationMethod: associationEvidence.associationMethod,
+          confidence: associationEvidence.confidence,
+        },
+        ['memberId', 'workId'],
+      );
       return {
         clubId,
         workId,
         source: input.source,
         available: true,
-        book: { id: book.id, title: book.title, author: book.author },
+        book: { id: responseBook.id, title: responseBook.title, author: responseBook.author },
+        associationMethod: associationEvidence.associationMethod,
+        confidence: associationEvidence.confidence,
       };
     });
   }
@@ -137,6 +241,7 @@ export class BookClubsService {
             source: isCloudMode() ? BookClubReadingCopySource.NONE : association.source,
             available: false,
             book: null,
+            ...associationEvidence(association, isCloudMode()),
           },
         };
       }
@@ -158,22 +263,38 @@ export class BookClubsService {
       lookup = { error };
     }
 
-    const currentAssociation = await this.dataSource.transaction(async (manager) => {
-      const { actor } = await this.getVisibleClub(manager, clubId, userId);
-      if (!actor) throw new ForbiddenException('Book club membership required');
+    const { associationIsCurrent, currentAssociation, authorizedBook } = await this.dataSource.transaction(
+      async (manager) => {
+        const { actor } = await this.getVisibleClub(manager, clubId, userId);
+        if (!actor) throw new ForbiddenException('Book club membership required');
 
-      const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
-      if (!work) throw new NotFoundException('Book club work not found');
+        const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+        if (!work) throw new NotFoundException('Book club work not found');
 
-      return manager.getRepository(BookClubReadingCopyEntity).findOne({ where: { memberId: actor.id, workId } });
-    });
+        const currentAssociation = await manager
+          .getRepository(BookClubReadingCopyEntity)
+          .findOne({ where: { memberId: actor.id, workId } });
+        const associationIsCurrent =
+          currentAssociation?.id === context.association.id &&
+          currentAssociation?.memberId === context.association.memberId &&
+          currentAssociation?.workId === context.association.workId &&
+          currentAssociation?.bookId === context.association.bookId &&
+          currentAssociation?.source === context.association.source &&
+          currentAssociation?.associationMethod === context.association.associationMethod &&
+          currentAssociation?.confidence === context.association.confidence;
+        const authorizedBook =
+          isCloudMode() && associationIsCurrent && 'book' in lookup
+            ? await manager.getRepository(BookEntity).findOne({
+                select: { id: true, title: true, author: true },
+                where: { id: context.bookId, uploadedByUserId: userId, deletedAt: IsNull() },
+                lock: { mode: 'pessimistic_write' },
+              })
+            : null;
 
-    const associationIsCurrent =
-      currentAssociation?.id === context.association.id &&
-      currentAssociation?.memberId === context.association.memberId &&
-      currentAssociation?.workId === context.association.workId &&
-      currentAssociation?.bookId === context.association.bookId &&
-      currentAssociation?.source === context.association.source;
+        return { associationIsCurrent, currentAssociation, authorizedBook };
+      },
+    );
+
     if (!associationIsCurrent) {
       const source =
         !currentAssociation || currentAssociation.source === BookClubReadingCopySource.NONE || isCloudMode()
@@ -191,6 +312,18 @@ export class BookClubsService {
         source: isCloudMode() ? BookClubReadingCopySource.NONE : context.association.source,
         available: false,
         book: null,
+        ...associationEvidence(context.association, isCloudMode()),
+      };
+    }
+
+    const responseBook = isCloudMode() ? authorizedBook : lookup.book;
+    if (!responseBook) {
+      return {
+        clubId,
+        workId,
+        source: BookClubReadingCopySource.NONE,
+        available: false,
+        book: null,
       };
     }
 
@@ -199,8 +332,138 @@ export class BookClubsService {
       workId,
       source: context.association.source,
       available: true,
-      book: { id: lookup.book.id, title: lookup.book.title, author: lookup.book.author },
+      book: { id: responseBook.id, title: responseBook.title, author: responseBook.author },
+      ...associationEvidence(context.association),
     };
+  }
+
+  async getWorkMatchCandidates(clubId: string, workId: string, userId: string): Promise<BookClubWorkMatchCandidate[]> {
+    return (await this.getWorkMatchCandidateSet(clubId, workId, userId)).candidates;
+  }
+
+  private async getWorkMatchCandidateSet(
+    clubId: string,
+    workId: string,
+    userId: string,
+  ): Promise<{ work: BookClubWorkEntity; candidates: BookClubWorkMatchCandidate[] }> {
+    const work = await this.dataSource.transaction(async (manager) => {
+      const { actor } = await this.getVisibleClub(manager, clubId, userId);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+
+      const selectedWork = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!selectedWork) throw new NotFoundException('Book club work not found');
+      return selectedWork;
+    });
+
+    if (!this.bookService) throw new Error('Book access service is not configured');
+    let books = await this.bookService.getMatchingBooks(work, userId);
+    let currentWork = await this.dataSource.transaction(async (manager) => {
+      const { actor } = await this.getVisibleClub(manager, clubId, userId);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+
+      const selectedWork = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!selectedWork) throw new NotFoundException('Book club work not found');
+      return selectedWork;
+    });
+
+    if (!sameWorkMatchMetadata(work, currentWork)) {
+      books = await this.bookService.getMatchingBooks(currentWork, userId);
+      const latestWork = await this.dataSource.transaction(async (manager) => {
+        const { actor } = await this.getVisibleClub(manager, clubId, userId);
+        if (!actor) throw new ForbiddenException('Book club membership required');
+
+        const selectedWork = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+        if (!selectedWork) throw new NotFoundException('Book club work not found');
+        return selectedWork;
+      });
+      if (!sameWorkMatchMetadata(currentWork, latestWork)) return { work: latestWork, candidates: [] };
+      currentWork = latestWork;
+    }
+
+    const booksById = new Map(books.map((book) => [book.id, book]));
+    const candidates = matchBookClubWork(currentWork, books).flatMap((match) => {
+      const book = booksById.get(match.bookId);
+      return book
+        ? [
+            {
+              ...match,
+              title: book.title,
+              author: book.author,
+              confirmationRequired: true as const,
+            },
+          ]
+        : [];
+    });
+
+    if (!isCloudMode() || candidates.length === 0) return { work: currentWork, candidates };
+
+    const {
+      work: lockedWork,
+      books: liveBooks,
+      matchesCurrentWork,
+    } = await this.dataSource.transaction(async (manager) => {
+      const { actor } = await this.getVisibleClub(manager, clubId, userId);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+
+      const selectedWork = await manager.getRepository(BookClubWorkEntity).findOne({
+        where: { id: workId, clubId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!selectedWork) throw new NotFoundException('Book club work not found');
+      if (!sameWorkMatchMetadata(currentWork, selectedWork)) {
+        return { work: selectedWork, books: [], matchesCurrentWork: false };
+      }
+
+      const books = await this.getCloudMatchableBooks(
+        manager,
+        candidates.map((candidate) => candidate.bookId),
+        userId,
+      );
+      return { work: selectedWork, books, matchesCurrentWork: true };
+    });
+    if (!matchesCurrentWork) return { work: lockedWork, candidates: [] };
+
+    const liveBooksById = new Map(liveBooks.map((book) => [book.id, book]));
+    const liveMatchesById = new Map(matchBookClubWork(lockedWork, liveBooks).map((match) => [match.bookId, match]));
+    const authorizedCandidates = candidates
+      .flatMap((candidate) => {
+        const book = liveBooksById.get(candidate.bookId);
+        const match = liveMatchesById.get(candidate.bookId);
+        return book && match
+          ? [
+              {
+                ...candidate,
+                method: match.method,
+                confidence: match.confidence,
+                title: book.title,
+                author: book.author,
+              },
+            ]
+          : [];
+      })
+      .sort((left, right) => right.confidence - left.confidence || left.bookId.localeCompare(right.bookId));
+    return { work: lockedWork, candidates: authorizedCandidates };
+  }
+
+  async confirmWorkMatch(
+    clubId: string,
+    workId: string,
+    userId: string,
+    bookId: string,
+  ): Promise<BookClubReadingCopyState> {
+    const { work, candidates } = await this.getWorkMatchCandidateSet(clubId, workId, userId);
+    const candidate = candidates.find((match) => match.bookId === bookId);
+    if (!candidate)
+      throw new BadRequestException('Book is not a current match candidate; use manual association instead');
+
+    return this.setReadingCopy(
+      clubId,
+      workId,
+      userId,
+      { source: BookClubReadingCopySource.PERSONAL, bookId },
+      { associationMethod: candidate.method, confidence: candidate.confidence },
+      work,
+    );
   }
 
   async clearReadingCopy(clubId: string, workId: string, userId: string): Promise<void> {
@@ -214,10 +477,17 @@ export class BookClubsService {
       if (!work) throw new NotFoundException('Book club work not found');
 
       const repository = manager.getRepository(BookClubReadingCopyEntity);
-      await repository.upsert({ memberId: actor.id, workId, bookId: null, source: BookClubReadingCopySource.NONE }, [
-        'memberId',
-        'workId',
-      ]);
+      await repository.upsert(
+        {
+          memberId: actor.id,
+          workId,
+          bookId: null,
+          source: BookClubReadingCopySource.NONE,
+          associationMethod: null,
+          confidence: null,
+        },
+        ['memberId', 'workId'],
+      );
     });
   }
 
@@ -387,9 +657,31 @@ export class BookClubsService {
         const workRepository = manager.getRepository(BookClubWorkEntity);
         const work = await workRepository.findOne({ where: { clubId } });
         if (!work) throw new NotFoundException('Book club not found');
-        work.title = input.selectedWork.title;
-        work.author = input.selectedWork.author;
+        const selectedWork = {
+          ...work,
+          ...input.selectedWork,
+          isbn: input.selectedWork.isbn ?? null,
+          externalWorkId: input.selectedWork.externalWorkId ?? null,
+          editionId: input.selectedWork.editionId ?? null,
+          series: input.selectedWork.series ?? null,
+          seriesPosition: input.selectedWork.seriesPosition ?? null,
+        };
+        const workReplaced = !sameWorkMatchMetadata(work, selectedWork);
+        Object.assign(work, {
+          ...selectedWork,
+        });
         await workRepository.save(work);
+        if (workReplaced) {
+          await manager.getRepository(BookClubReadingCopyEntity).update(
+            { workId: work.id },
+            {
+              bookId: null,
+              source: BookClubReadingCopySource.NONE,
+              associationMethod: null,
+              confidence: null,
+            },
+          );
+        }
       }
       return club;
     });
@@ -440,6 +732,54 @@ export class BookClubsService {
     return { club, actor };
   }
 
+  private async getCloudMatchableBooks(
+    manager: EntityManager,
+    bookIds: string[],
+    userId: string,
+  ): Promise<BookEntity[]> {
+    if (bookIds.length === 0) return [];
+
+    const books = await manager.getRepository(BookEntity).find({
+      select: {
+        id: true,
+        title: true,
+        author: true,
+        isbn: true,
+        externalWorkId: true,
+        editionId: true,
+        series: true,
+        seriesPosition: true,
+      },
+      where: { id: In(bookIds), uploadedByUserId: userId, deletedAt: IsNull() },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (books.length === 0) return [];
+
+    const formats = await manager.getRepository(BookFormatEntity).find({
+      select: {
+        id: true,
+        bookId: true,
+        title: true,
+        author: true,
+        isbn: true,
+        externalWorkId: true,
+        editionId: true,
+        series: true,
+        seriesPosition: true,
+      },
+      where: { bookId: In(books.map((book) => book.id)) },
+      lock: { mode: 'pessimistic_write' },
+    });
+    const formatsByBookId = new Map<string, BookFormatEntity[]>();
+    for (const format of formats) {
+      const bookFormats = formatsByBookId.get(format.bookId) ?? [];
+      bookFormats.push(format);
+      formatsByBookId.set(format.bookId, bookFormats);
+    }
+
+    return books.map((book) => Object.assign(book, { formats: formatsByBookId.get(book.id) ?? [] }));
+  }
+
   async createClub(
     userId: string,
     input: CreateBookClubInput,
@@ -458,10 +798,31 @@ export class BookClubsService {
       });
       await clubRepository.save(club);
       await memberRepository.save(memberRepository.create({ clubId: club.id, userId, role: BookClubRole.OWNER }));
-      const selectedWork = await workRepository.save(
-        workRepository.create({ clubId: club.id, title: input.selectedWork.title, author: input.selectedWork.author }),
-      );
+      const selectedWork = await workRepository.save(workRepository.create({ clubId: club.id, ...input.selectedWork }));
       return Object.assign(club, { selectedWork });
     });
   }
+}
+
+function sameWorkMatchMetadata(left: BookClubWorkEntity, right: BookClubWorkEntity): boolean {
+  return (
+    left.title === right.title &&
+    left.author === right.author &&
+    (left.isbn ?? null) === (right.isbn ?? null) &&
+    (left.externalWorkId ?? null) === (right.externalWorkId ?? null) &&
+    (left.editionId ?? null) === (right.editionId ?? null) &&
+    (left.series ?? null) === (right.series ?? null) &&
+    (left.seriesPosition ?? null) === (right.seriesPosition ?? null)
+  );
+}
+
+function associationEvidence(
+  association: BookClubReadingCopyEntity,
+  hideEvidence = false,
+): Pick<BookClubReadingCopyState, 'associationMethod' | 'confidence'> | Record<string, never> {
+  if (hideEvidence || !association.associationMethod) return {};
+  return {
+    associationMethod: association.associationMethod,
+    confidence: association.confidence ?? null,
+  };
 }

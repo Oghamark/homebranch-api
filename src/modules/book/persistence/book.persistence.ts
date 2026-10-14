@@ -1,6 +1,6 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Repository, SelectQueryBuilder } from 'typeorm';
+import { Brackets, In, IsNull, Repository, SelectQueryBuilder } from 'typeorm';
 import { PaginationResult } from 'src/common/core/pagination_result';
 import { Book } from 'src/modules/book/book.model';
 import { BookEntity } from 'src/modules/book/book.entity';
@@ -15,6 +15,16 @@ export interface BookSearchFilters {
   genre?: string;
   series?: string;
   author?: string;
+}
+
+export interface WorkBookIdentifiers {
+  title: string;
+  author?: string;
+  isbn?: string | null;
+  externalWorkId?: string | null;
+  editionId?: string | null;
+  series?: string | null;
+  seriesPosition?: number | null;
 }
 
 @Injectable()
@@ -140,6 +150,10 @@ export class BookPersistenceService {
       offset,
       userId,
     );
+  }
+
+  findMatchingBooksForWork(work: WorkBookIdentifiers, ownerScope?: string): Promise<Book[]> {
+    return findMatchingBooksForWork(this.bookRepository, work, ownerScope);
   }
 
   findBooksWithoutMetadata(limit: number): Promise<Book[]> {
@@ -425,6 +439,100 @@ export async function findBookByContentHash(
 export async function findAllActiveBooks(repository: Repository<BookEntity>): Promise<Book[]> {
   const bookEntities = await repository.find({ where: { deletedAt: IsNull() }, relations: { formats: true } });
   return normalizeBookEntities(bookEntities);
+}
+
+export async function findMatchingBooksForWork(
+  repository: Repository<BookEntity>,
+  work: WorkBookIdentifiers,
+  ownerScope?: string,
+): Promise<Book[]> {
+  const query = repository
+    .createQueryBuilder('book')
+    .leftJoinAndSelect('book.formats', 'format')
+    .select([
+      'book.id',
+      'book.title',
+      'book.author',
+      'book.isbn',
+      'book.externalWorkId',
+      'book.editionId',
+      'book.series',
+      'book.seriesPosition',
+      'format.id',
+      'format.bookId',
+      'format.title',
+      'format.author',
+      'format.isbn',
+      'format.externalWorkId',
+      'format.editionId',
+      'format.series',
+      'format.seriesPosition',
+    ])
+    .where('book.deletedAt IS NULL');
+
+  if (ownerScope) query.andWhere('book.uploadedByUserId = :ownerScope', { ownerScope });
+
+  const title = normalizeSearchMetadata(work.title);
+  const identifiers = [
+    { property: 'isbn', value: work.isbn },
+    { property: 'externalWorkId', value: work.externalWorkId },
+    { property: 'editionId', value: work.editionId },
+  ]
+    .map(({ property, value }, index) => ({
+      property,
+      parameter: `identifier${index}`,
+      value: normalizeSearchMetadata(value ?? ''),
+    }))
+    .filter((identifier) => identifier.value.length > 0);
+  const identifierConditions = identifiers.flatMap(({ property, parameter }) =>
+    ['book', 'format'].map(
+      (alias) => `regexp_replace(lower(${alias}.${property}), '[^[:alnum:]]', '', 'g') = :${parameter}`,
+    ),
+  );
+
+  query.andWhere(
+    new Brackets((criteria) => {
+      const metadataCondition = (alias: 'book' | 'format') => {
+        const terms = [`${normalizeSearchSql(`${alias}.title`)} = :title`];
+        const parameters: Record<string, string | number> = { title };
+        if (work.author) {
+          const authorColumn = alias === 'format' ? 'COALESCE(format.author, book.author)' : 'book.author';
+          terms.push(`${normalizeSearchSql(authorColumn)} = :author`);
+          parameters.author = normalizeSearchMetadata(work.author);
+        }
+        if (work.series) {
+          terms.push(`(${alias}.series IS NULL OR ${normalizeSearchSql(`${alias}.series`)} = :series)`);
+          parameters.series = normalizeSearchMetadata(work.series);
+        }
+        if (work.seriesPosition != null) {
+          terms.push(`(${alias}.seriesPosition IS NULL OR ${alias}.seriesPosition = :seriesPosition)`);
+          parameters.seriesPosition = work.seriesPosition;
+        }
+        return { condition: `(${terms.join(' AND ')})`, parameters };
+      };
+      const bookMetadata = metadataCondition('book');
+      const formatMetadata = metadataCondition('format');
+      criteria.where(bookMetadata.condition, bookMetadata.parameters);
+      criteria.orWhere(formatMetadata.condition, formatMetadata.parameters);
+      for (const { property, parameter, value } of identifiers) {
+        for (const alias of ['book', 'format']) {
+          criteria.orWhere(`regexp_replace(lower(${alias}.${property}), '[^[:alnum:]]', '', 'g') = :${parameter}`, {
+            [parameter]: value,
+          });
+        }
+      }
+    }),
+  );
+
+  if (identifierConditions.length > 0) {
+    query
+      .addSelect(`CASE WHEN ${identifierConditions.join(' OR ')} THEN 0 ELSE 1 END`, 'identifier_match_rank')
+      .orderBy('identifier_match_rank', 'ASC');
+  } else {
+    query.orderBy('book.id', 'ASC');
+  }
+
+  return normalizeBookEntities(await query.addOrderBy('book.id', 'ASC').take(100).getMany());
 }
 
 export async function findUnownedBooks(
@@ -761,6 +869,18 @@ function applySearchFilters(qb: SelectQueryBuilder<BookEntity>, filters: BookSea
   }
 }
 
+function normalizeSearchMetadata(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function normalizeSearchSql(column: string): string {
+  return `regexp_replace(regexp_replace(normalize(lower(${column}), NFKD), U&'[\\0300-\\036F]', '', 'g'), '[^[:alnum:]]', '', 'g')`;
+}
+
 function cloneFormatEntity(format: BookFormatEntity, bookId?: string): BookFormatEntity {
   const clonedFormat = Object.assign(new BookFormatEntity(), format);
   Reflect.deleteProperty(clonedFormat, 'book');
@@ -791,6 +911,8 @@ function toBookEntity(book: Book): BookEntity {
     series: book.series,
     seriesPosition: book.seriesPosition,
     isbn: book.isbn,
+    externalWorkId: book.externalWorkId,
+    editionId: book.editionId,
     pageCount: book.pageCount,
     publisher: book.publisher,
     language: book.language,
@@ -821,6 +943,8 @@ function applyPersistence(existing: BookEntity, persistence: BookEntity): void {
   existing.series = persistence.series;
   existing.seriesPosition = persistence.seriesPosition;
   existing.isbn = persistence.isbn;
+  existing.externalWorkId = persistence.externalWorkId;
+  existing.editionId = persistence.editionId;
   existing.pageCount = persistence.pageCount;
   existing.publisher = persistence.publisher;
   existing.language = persistence.language;
