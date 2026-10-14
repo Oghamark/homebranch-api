@@ -102,6 +102,37 @@ describe('findMatchingBooksForWork', () => {
     expect(metadataConditions).toContain('book.seriesPosition');
   });
 
+  test('uses the parent book author when prefiltering format-title candidates', async () => {
+    const queryBuilder = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    const repository = {
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+    } as unknown as Repository<BookEntity>;
+
+    await findMatchingBooksForWork(repository, { title: 'The Edition Title', author: 'A. Writer' });
+
+    const whereCalls = queryBuilder.andWhere.mock.calls as unknown as Array<[unknown]>;
+    const bracket = whereCalls
+      .map(([condition]) => condition)
+      .find((condition): condition is Brackets => condition instanceof Brackets);
+    expect(bracket).toBeDefined();
+    const conditions: string[] = [];
+    bracket!.whereFactory({
+      where: (condition: string) => conditions.push(condition),
+      orWhere: (condition: string) => conditions.push(condition),
+    } as never);
+
+    expect(conditions.join(' ')).toContain('COALESCE(format.author, book.author)');
+  });
+
   test('selects only matching metadata instead of hashes and file metadata', async () => {
     const queryBuilder = {
       leftJoinAndSelect: jest.fn().mockReturnThis(),

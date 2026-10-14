@@ -496,7 +496,8 @@ export async function findMatchingBooksForWork(
         const terms = [`${normalizeSearchSql(`${alias}.title`)} = :title`];
         const parameters: Record<string, string | number> = { title };
         if (work.author) {
-          terms.push(`${normalizeSearchSql(`${alias}.author`)} = :author`);
+          const authorColumn = alias === 'format' ? 'COALESCE(format.author, book.author)' : 'book.author';
+          terms.push(`${normalizeSearchSql(authorColumn)} = :author`);
           parameters.author = normalizeSearchMetadata(work.author);
         }
         if (work.series) {

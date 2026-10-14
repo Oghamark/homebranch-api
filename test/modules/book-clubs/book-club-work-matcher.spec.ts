@@ -53,6 +53,19 @@ describe('Book club logical-work matching', () => {
     expect(matches).toEqual([{ bookId: 'book-pdf', method: 'metadata_candidate', confidence: 0.75 }]);
   });
 
+  it('uses the parent book author when a matching edition title has no format author', () => {
+    const matches = matchBookClubWork({ title: 'The Edition Title', author: 'A. Writer' }, [
+      {
+        id: 'book-pdf',
+        title: 'Different parent title',
+        author: 'A. Writer',
+        formats: [{ format: 'pdf', title: 'The Edition Title' }],
+      },
+    ] as never);
+
+    expect(matches).toEqual([{ bookId: 'book-pdf', method: 'metadata_candidate', confidence: 0.75 }]);
+  });
+
   it('rejects a same-title false positive when external work identifiers conflict', () => {
     expect(
       matchBookClubWork({ title: 'The Same Story', author: 'A. Writer', externalWorkId: 'work-a' }, [

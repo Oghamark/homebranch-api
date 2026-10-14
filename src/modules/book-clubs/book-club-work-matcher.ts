@@ -38,7 +38,11 @@ export function matchBookClubWork(work: BookClubWorkMatchSource, books: Matchabl
       return [{ bookId: book.id, method: BookClubAssociationMethod.IDENTIFIER, confidence: 1 }];
     }
 
-    if (![book, ...(book.formats ?? [])].some((edition) => hasMetadataMatch(work, edition))) return [];
+    if (
+      !hasMetadataMatch(work, book) &&
+      !(book.formats ?? []).some((edition) => hasMetadataMatch(work, edition, book.author))
+    )
+      return [];
     return [{ bookId: book.id, method: BookClubAssociationMethod.METADATA_CANDIDATE, confidence: 0.75 }];
   });
 
@@ -68,12 +72,17 @@ function identifiersEqual(left?: string | null, right?: string | null): boolean 
   return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
-function hasMetadataMatch(work: BookClubWorkMatchSource, book: Partial<BookClubWorkMatchSource>): boolean {
-  if (!book.title || !book.author) return false;
+function hasMetadataMatch(
+  work: BookClubWorkMatchSource,
+  book: Partial<BookClubWorkMatchSource>,
+  fallbackAuthor?: string,
+): boolean {
+  const author = book.author ?? fallbackAuthor;
+  if (!book.title || !author) return false;
   const normalizedWorkTitle = normalizeMetadata(work.title);
   const normalizedBookTitle = normalizeMetadata(book.title);
   const normalizedWorkAuthor = normalizeMetadata(work.author);
-  const normalizedBookAuthor = normalizeMetadata(book.author);
+  const normalizedBookAuthor = normalizeMetadata(author);
   if (!normalizedWorkTitle || !normalizedBookTitle || normalizedWorkTitle !== normalizedBookTitle) return false;
   if (!normalizedWorkAuthor || !normalizedBookAuthor || normalizedWorkAuthor !== normalizedBookAuthor) return false;
 
