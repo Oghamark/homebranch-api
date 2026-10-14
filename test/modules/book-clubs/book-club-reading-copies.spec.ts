@@ -60,7 +60,7 @@ describe('Book club reading-copy associations', () => {
     readingCopyRepository.upsert.mockReset().mockResolvedValue(undefined);
     delete process.env.CLOUD_MODE;
     clubRepository.findOne.mockResolvedValue(club);
-    memberRepository.findOne.mockResolvedValue(membership);
+    memberRepository.findOne.mockReset().mockResolvedValue(membership);
     workRepository.findOne.mockResolvedValue(work);
     readingCopyRepository.findOne.mockReset().mockResolvedValue(undefined);
     readingCopyRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
