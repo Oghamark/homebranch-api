@@ -220,24 +220,38 @@ export class BookClubsService {
       lookup = { error };
     }
 
-    const currentAssociation = await this.dataSource.transaction(async (manager) => {
-      const { actor } = await this.getVisibleClub(manager, clubId, userId);
-      if (!actor) throw new ForbiddenException('Book club membership required');
+    const { associationIsCurrent, currentAssociation, authorizedBook } = await this.dataSource.transaction(
+      async (manager) => {
+        const { actor } = await this.getVisibleClub(manager, clubId, userId);
+        if (!actor) throw new ForbiddenException('Book club membership required');
 
-      const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
-      if (!work) throw new NotFoundException('Book club work not found');
+        const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+        if (!work) throw new NotFoundException('Book club work not found');
 
-      return manager.getRepository(BookClubReadingCopyEntity).findOne({ where: { memberId: actor.id, workId } });
-    });
+        const currentAssociation = await manager
+          .getRepository(BookClubReadingCopyEntity)
+          .findOne({ where: { memberId: actor.id, workId } });
+        const associationIsCurrent =
+          currentAssociation?.id === context.association.id &&
+          currentAssociation?.memberId === context.association.memberId &&
+          currentAssociation?.workId === context.association.workId &&
+          currentAssociation?.bookId === context.association.bookId &&
+          currentAssociation?.source === context.association.source &&
+          currentAssociation?.associationMethod === context.association.associationMethod &&
+          currentAssociation?.confidence === context.association.confidence;
+        const authorizedBook =
+          isCloudMode() && associationIsCurrent && 'book' in lookup
+            ? await manager.getRepository(BookEntity).findOne({
+                select: { id: true, title: true, author: true },
+                where: { id: context.bookId, uploadedByUserId: userId, deletedAt: IsNull() },
+                lock: { mode: 'pessimistic_write' },
+              })
+            : null;
 
-    const associationIsCurrent =
-      currentAssociation?.id === context.association.id &&
-      currentAssociation?.memberId === context.association.memberId &&
-      currentAssociation?.workId === context.association.workId &&
-      currentAssociation?.bookId === context.association.bookId &&
-      currentAssociation?.source === context.association.source &&
-      currentAssociation?.associationMethod === context.association.associationMethod &&
-      currentAssociation?.confidence === context.association.confidence;
+        return { associationIsCurrent, currentAssociation, authorizedBook };
+      },
+    );
+
     if (!associationIsCurrent) {
       const source =
         !currentAssociation || currentAssociation.source === BookClubReadingCopySource.NONE || isCloudMode()
@@ -259,12 +273,23 @@ export class BookClubsService {
       };
     }
 
+    const responseBook = isCloudMode() ? authorizedBook : lookup.book;
+    if (!responseBook) {
+      return {
+        clubId,
+        workId,
+        source: BookClubReadingCopySource.NONE,
+        available: false,
+        book: null,
+      };
+    }
+
     return {
       clubId,
       workId,
       source: context.association.source,
       available: true,
-      book: { id: lookup.book.id, title: lookup.book.title, author: lookup.book.author },
+      book: { id: responseBook.id, title: responseBook.title, author: responseBook.author },
       ...associationEvidence(context.association),
     };
   }

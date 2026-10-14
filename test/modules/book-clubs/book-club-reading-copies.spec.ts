@@ -441,6 +441,69 @@ describe('Book club reading-copy associations', () => {
     }
   });
 
+  it.each(['reassignment', 'deletion'] as const)(
+    'does not disclose a stale Cloud book after %s between lookup and response',
+    async (change) => {
+      process.env.CLOUD_MODE = 'true';
+      const association = {
+        id: 'reading-copy-association',
+        memberId: membership.id,
+        workId,
+        bookId,
+        source: BookClubReadingCopySource.PERSONAL,
+        associationMethod: BookClubAssociationMethod.MANUAL_CONFIRMATION,
+        confidence: 1,
+      };
+      readingCopyRepository.findOne.mockResolvedValue(association);
+      let liveBook = { id: bookId, uploadedByUserId: userId, deletedAt: null as Date | null };
+      bookService.getBookById.mockImplementation(() => {
+        expect(transactionDepth).toBe(0);
+        const lookedUpBook = {
+          id: bookId,
+          title: 'Stale private title',
+          author: 'Stale private author',
+        };
+        liveBook = {
+          ...liveBook,
+          ...(change === 'reassignment' ? { uploadedByUserId: 'new-owner' } : { deletedAt: new Date() }),
+        };
+        return Promise.resolve(lookedUpBook as never);
+      });
+      bookRepository.findOne.mockImplementation(({ where }: { where: { id: string; uploadedByUserId: string } }) => {
+        expect(transactionDepth).toBe(1);
+        return Promise.resolve(
+          liveBook.id === where.id && liveBook.uploadedByUserId === where.uploadedByUserId && !liveBook.deletedAt
+            ? { ...liveBook, title: 'Stale private title', author: 'Stale private author' }
+            : null,
+        );
+      });
+
+      try {
+        await expect(service.getReadingCopy(clubId, workId, userId)).resolves.toEqual({
+          clubId,
+          workId,
+          source: BookClubReadingCopySource.NONE,
+          available: false,
+          book: null,
+        });
+
+        const [authorizationQuery] = bookRepository.findOne.mock.calls[0] as [
+          {
+            select: { id: boolean; title: boolean; author: boolean };
+            where: { id: string; uploadedByUserId: string; deletedAt: unknown };
+            lock: { mode: string };
+          },
+        ];
+        expect(authorizationQuery.where).toMatchObject({ id: bookId, uploadedByUserId: userId });
+        expect(authorizationQuery.where).toHaveProperty('deletedAt');
+        expect(authorizationQuery.lock.mode).toBe('pessimistic_write');
+        expect(authorizationQuery.select).toEqual({ id: true, title: true, author: true });
+      } finally {
+        delete process.env.CLOUD_MODE;
+      }
+    },
+  );
+
   it('resets every member association and its match evidence when the selected logical work is replaced', async () => {
     const owner = { id: 'owner-membership', clubId, userId, role: BookClubRole.OWNER };
     const otherMember = { id: 'other-membership', clubId, userId: 'other-reader', role: BookClubRole.MEMBER };
