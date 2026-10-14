@@ -151,17 +151,40 @@ export class BookClubsService {
     if (context.kind === 'state') return context.state;
     if (!this.bookService) throw new Error('Book access service is not configured');
 
+    let lookup: { book: Awaited<ReturnType<BookService['getBookById']>> } | { error: unknown };
     try {
-      const book = await this.bookService.getBookById(context.bookId, userId, isCloudMode() ? userId : undefined);
-      return {
-        clubId,
-        workId,
-        source: context.association.source,
-        available: true,
-        book: { id: book.id, title: book.title, author: book.author },
-      };
+      lookup = { book: await this.bookService.getBookById(context.bookId, userId, isCloudMode() ? userId : undefined) };
     } catch (error) {
-      if (!(error instanceof NotFoundException) && !(error instanceof ForbiddenException)) throw error;
+      lookup = { error };
+    }
+
+    const currentAssociation = await this.dataSource.transaction(async (manager) => {
+      const { actor } = await this.getVisibleClub(manager, clubId, userId);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+
+      const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!work) throw new NotFoundException('Book club work not found');
+
+      return manager.getRepository(BookClubReadingCopyEntity).findOne({ where: { memberId: actor.id, workId } });
+    });
+
+    const associationIsCurrent =
+      currentAssociation?.id === context.association.id &&
+      currentAssociation?.memberId === context.association.memberId &&
+      currentAssociation?.workId === context.association.workId &&
+      currentAssociation?.bookId === context.association.bookId &&
+      currentAssociation?.source === context.association.source;
+    if (!associationIsCurrent) {
+      const source =
+        !currentAssociation || currentAssociation.source === BookClubReadingCopySource.NONE || isCloudMode()
+          ? BookClubReadingCopySource.NONE
+          : currentAssociation.source;
+      return { clubId, workId, source, available: false, book: null };
+    }
+
+    if ('error' in lookup) {
+      if (!(lookup.error instanceof NotFoundException) && !(lookup.error instanceof ForbiddenException))
+        throw lookup.error;
       return {
         clubId,
         workId,
@@ -170,6 +193,14 @@ export class BookClubsService {
         book: null,
       };
     }
+
+    return {
+      clubId,
+      workId,
+      source: context.association.source,
+      available: true,
+      book: { id: lookup.book.id, title: lookup.book.title, author: lookup.book.author },
+    };
   }
 
   async clearReadingCopy(clubId: string, workId: string, userId: string): Promise<void> {

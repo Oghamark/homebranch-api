@@ -62,7 +62,7 @@ describe('Book club reading-copy associations', () => {
     clubRepository.findOne.mockResolvedValue(club);
     memberRepository.findOne.mockResolvedValue(membership);
     workRepository.findOne.mockResolvedValue(work);
-    readingCopyRepository.findOne.mockResolvedValue(undefined);
+    readingCopyRepository.findOne.mockReset().mockResolvedValue(undefined);
     readingCopyRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
     bookService.getBookById.mockResolvedValue({
       id: bookId,
@@ -121,6 +121,35 @@ describe('Book club reading-copy associations', () => {
       book: { id: bookId, title: 'Available local edition', author: 'Author' },
     });
     expect(JSON.stringify(result)).not.toMatch(/summary|uploadedByUserId|formats|annotations|position|history/i);
+  });
+
+  it('revalidates private-club membership after the book lookup before returning a copy', async () => {
+    clubRepository.findOne.mockResolvedValue({ ...club, visibility: BookClubVisibility.PRIVATE });
+    memberRepository.findOne.mockResolvedValueOnce(membership).mockResolvedValueOnce(undefined);
+    readingCopyRepository.findOne.mockResolvedValue({ memberId: membership.id, workId, bookId, source: 'personal' });
+
+    await expect(service.getReadingCopy(clubId, workId, userId)).rejects.toMatchObject({ status: 404 });
+
+    expect(bookService.getBookById).toHaveBeenCalledWith(bookId, userId, undefined);
+    expect(clubRepository.findOne).toHaveBeenCalledTimes(2);
+    expect(readingCopyRepository.findOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not return a book summary when the reading-copy association changes during lookup', async () => {
+    readingCopyRepository.findOne
+      .mockResolvedValueOnce({ memberId: membership.id, workId, bookId, source: 'personal' })
+      .mockResolvedValueOnce({ memberId: membership.id, workId, bookId: 'replacement-book', source: 'personal' });
+
+    await expect(service.getReadingCopy(clubId, workId, userId)).resolves.toEqual({
+      clubId,
+      workId,
+      source: 'personal',
+      available: false,
+      book: null,
+    });
+
+    expect(bookService.getBookById).toHaveBeenCalledWith(bookId, userId, undefined);
+    expect(readingCopyRepository.findOne).toHaveBeenCalledTimes(2);
   });
 
   it('looks up books only after private-club visibility and membership checks finish outside the transaction', async () => {
