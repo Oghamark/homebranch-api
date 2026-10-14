@@ -1,7 +1,6 @@
-import { IsString, Length } from 'class-validator';
+import { IsUUID } from 'class-validator';
 
 export class TransferBookClubOwnershipDto {
-  @IsString()
-  @Length(1, 200)
+  @IsUUID()
   newOwnerUserId: string;
 }

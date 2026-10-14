@@ -25,11 +25,11 @@ All routes require the existing JWT authentication guard. The authenticated acco
 | `POST` | `/book-clubs/:clubId/archive` | Owner archives the club. Archived clubs are omitted from lists and cannot be joined or modified. |
 | `DELETE` | `/book-clubs/:clubId` | Owner permanently deletes the club; member and selected-work rows are removed by the club foreign-key cascades. |
 
-Club and member route parameters (`clubId`, `userId`) must be valid UUIDs; malformed values return `400`.
+Club and member route parameters (`clubId`, `userId`) and the add-member/ownership-transfer target IDs must be syntactically valid UUIDs; malformed values return `400`.
 
 Private-club reads and mutations by non-members return the same `404 Book club not found` response so club existence, membership, and selected-work metadata are not disclosed. For target-member mutations, actor visibility/authorization is checked before looking up the target account's membership. Permission failures for visible clubs return `403`; invalid DTOs or malformed UUIDs return `400`; duplicate membership returns `409`; unauthenticated calls return `401`.
 
-Membership assignment accepts an account ID but does not validate it against a user directory: this backend has no local user entity or user-directory contract. Callers must supply an account from this same instance. The route creates membership directly; it does not send an invitation or contact another instance.
+Add-member validates UUID syntax only. This backend has no local user entity or user-directory contract, so it does not verify that the supplied ID identifies an existing account or belongs to this instance; it creates a local membership row for the supplied UUID. Ownership transfer likewise accepts a UUID only when it identifies an existing member of that club. Neither route performs a remote user lookup, sends an invitation, or contacts another instance.
 
 ## Deliberate exclusions
 

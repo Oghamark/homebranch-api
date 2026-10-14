@@ -1,9 +1,8 @@
-import { IsIn, IsOptional, IsString, Length } from 'class-validator';
+import { IsIn, IsOptional, IsUUID } from 'class-validator';
 import { BookClubRole } from 'src/modules/book-clubs/book-club.types';
 
 export class AddBookClubMemberDto {
-  @IsString()
-  @Length(1, 200)
+  @IsUUID()
   userId: string;
 
   @IsOptional()

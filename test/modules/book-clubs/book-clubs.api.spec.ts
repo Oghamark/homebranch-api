@@ -175,6 +175,34 @@ describe('BookClubsController API', () => {
     expect(service.deleteClub).not.toHaveBeenCalled();
   });
 
+  it('rejects non-UUID add-member and ownership-transfer target IDs at the API boundary', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174000';
+    const requests = [
+      {
+        method: 'POST',
+        path: `/book-clubs/${clubId}/members`,
+        body: { userId: 'not-a-uuid' },
+      },
+      {
+        method: 'POST',
+        path: `/book-clubs/${clubId}/transfer-ownership`,
+        body: { newOwnerUserId: 'not-a-uuid' },
+      },
+    ];
+
+    for (const request of requests) {
+      const response = await fetch(`${baseUrl}${request.path}`, {
+        method: request.method,
+        headers: { 'content-type': 'application/json', 'x-test-user': clubId },
+        body: JSON.stringify(request.body),
+      });
+      expect(response.status).toBe(400);
+    }
+
+    expect(service.addMember).not.toHaveBeenCalled();
+    expect(service.transferOwnership).not.toHaveBeenCalled();
+  });
+
   it('routes club deletion to the service for the authenticated actor', async () => {
     const clubId = '123e4567-e89b-42d3-a456-426614174000';
     const response = await fetch(`${baseUrl}/book-clubs/${clubId}`, {
