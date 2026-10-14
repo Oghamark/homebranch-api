@@ -87,20 +87,14 @@ export class BookClubsService {
 
       const book = await this.bookService.getBookById(input.bookId, userId, isCloudMode() ? userId : undefined);
       const repository = manager.getRepository(BookClubReadingCopyEntity);
-      const association = await repository.findOne({ where: { memberId: actor.id, workId } });
-      const saved = await repository.save(
-        repository.create({
-          ...association,
-          memberId: actor.id,
-          workId,
-          bookId: input.bookId,
-          source: input.source,
-        }),
-      );
+      await repository.upsert({ memberId: actor.id, workId, bookId: input.bookId, source: input.source }, [
+        'memberId',
+        'workId',
+      ]);
       return {
         clubId,
         workId,
-        source: saved.source,
+        source: input.source,
         available: true,
         book: { id: book.id, title: book.title, author: book.author },
       };
@@ -167,16 +161,10 @@ export class BookClubsService {
       if (!work) throw new NotFoundException('Book club work not found');
 
       const repository = manager.getRepository(BookClubReadingCopyEntity);
-      const association = await repository.findOne({ where: { memberId: actor.id, workId } });
-      await repository.save(
-        repository.create({
-          ...association,
-          memberId: actor.id,
-          workId,
-          bookId: null,
-          source: BookClubReadingCopySource.NONE,
-        }),
-      );
+      await repository.upsert({ memberId: actor.id, workId, bookId: null, source: BookClubReadingCopySource.NONE }, [
+        'memberId',
+        'workId',
+      ]);
     });
   }
 

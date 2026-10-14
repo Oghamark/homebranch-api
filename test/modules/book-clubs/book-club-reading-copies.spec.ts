@@ -31,6 +31,7 @@ describe('Book club reading-copy associations', () => {
     create: jest.fn((value: unknown) => value),
     findOne: jest.fn(),
     save: jest.fn(),
+    upsert: jest.fn(),
   };
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
@@ -48,6 +49,7 @@ describe('Book club reading-copy associations', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    readingCopyRepository.upsert.mockReset().mockResolvedValue(undefined);
     delete process.env.CLOUD_MODE;
     clubRepository.findOne.mockResolvedValue(club);
     memberRepository.findOne.mockResolvedValue(membership);
@@ -77,8 +79,9 @@ describe('Book club reading-copy associations', () => {
     });
 
     expect(bookService.getBookById).toHaveBeenCalledWith(bookId, userId, undefined);
-    expect(readingCopyRepository.save).toHaveBeenCalledWith(
-      expect.objectContaining({ memberId: membership.id, workId, bookId, source: 'shared' }),
+    expect(readingCopyRepository.upsert).toHaveBeenCalledWith(
+      { memberId: membership.id, workId, bookId, source: 'shared' },
+      ['memberId', 'workId'],
     );
     expect(result).toEqual({
       clubId,
@@ -113,15 +116,13 @@ describe('Book club reading-copy associations', () => {
   });
 
   it('lets a self-hosted member switch a work association from shared to personal', async () => {
-    const existing = { id: 'existing-association', memberId: membership.id, workId, bookId, source: 'shared' };
-    readingCopyRepository.findOne.mockResolvedValueOnce(undefined).mockResolvedValueOnce(existing);
-
     await service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.SHARED, bookId });
     await service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.PERSONAL, bookId });
 
-    expect(readingCopyRepository.save).toHaveBeenNthCalledWith(
+    expect(readingCopyRepository.upsert).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ id: existing.id, memberId: membership.id, workId, bookId, source: 'personal' }),
+      { memberId: membership.id, workId, bookId, source: 'personal' },
+      ['memberId', 'workId'],
     );
   });
 
@@ -138,6 +139,7 @@ describe('Book club reading-copy associations', () => {
       ).rejects.toMatchObject({ status: 404 });
       expect(bookService.getBookById).toHaveBeenCalledWith(bookId, userId, userId);
       expect(readingCopyRepository.save).not.toHaveBeenCalled();
+      expect(readingCopyRepository.upsert).not.toHaveBeenCalled();
     } finally {
       delete process.env.CLOUD_MODE;
     }
@@ -173,6 +175,7 @@ describe('Book club reading-copy associations', () => {
       ).rejects.toMatchObject({ status: 403 });
       expect(bookService.getBookById).not.toHaveBeenCalled();
       expect(readingCopyRepository.save).not.toHaveBeenCalled();
+      expect(readingCopyRepository.upsert).not.toHaveBeenCalled();
     } finally {
       delete process.env.CLOUD_MODE;
     }
@@ -183,8 +186,9 @@ describe('Book club reading-copy associations', () => {
     try {
       await service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.PERSONAL, bookId });
       expect(bookService.getBookById).toHaveBeenCalledWith(bookId, userId, userId);
-      expect(readingCopyRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ memberId: membership.id, workId, bookId, source: 'personal' }),
+      expect(readingCopyRepository.upsert).toHaveBeenCalledWith(
+        { memberId: membership.id, workId, bookId, source: 'personal' },
+        ['memberId', 'workId'],
       );
     } finally {
       delete process.env.CLOUD_MODE;
@@ -264,6 +268,66 @@ describe('Book club reading-copy associations', () => {
     expect(bookService.getBookById).not.toHaveBeenCalled();
   });
 
+  it('completes concurrent first-time set and clear requests without a uniqueness failure', async () => {
+    type StoredAssociation = {
+      id: string;
+      memberId: string;
+      workId: string;
+      bookId: string | null;
+      source: string;
+    };
+    let storedAssociation: StoredAssociation | undefined;
+    let readCount = 0;
+    let releaseReads: () => void = () => undefined;
+    const bothReadsCompleted = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+
+    readingCopyRepository.findOne.mockImplementation(async () => {
+      const observedAssociation = storedAssociation;
+      readCount += 1;
+      if (readCount === 2) releaseReads();
+      await bothReadsCompleted;
+      return observedAssociation;
+    });
+    readingCopyRepository.save.mockImplementation((value: unknown) => {
+      const association = value as StoredAssociation;
+      if (storedAssociation) throw new Error('duplicate key violates unique constraint');
+      storedAssociation = { ...association, id: 'first-association' };
+      return storedAssociation;
+    });
+    readingCopyRepository.upsert.mockImplementation((value: unknown, conflictPaths: string[]) => {
+      const association = value as StoredAssociation;
+      expect(conflictPaths).toEqual(['memberId', 'workId']);
+      storedAssociation = storedAssociation
+        ? { ...storedAssociation, ...association }
+        : { ...association, id: 'first-association' };
+    });
+
+    const results = await Promise.allSettled([
+      service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.PERSONAL, bookId }),
+      service.clearReadingCopy(clubId, workId, userId),
+    ]);
+
+    expect(results.map(({ status }) => status)).toEqual(['fulfilled', 'fulfilled']);
+    expect(storedAssociation).toEqual(
+      expect.objectContaining({
+        id: 'first-association',
+        memberId: membership.id,
+        workId,
+      }),
+    );
+    expect(readingCopyRepository.upsert).toHaveBeenCalledTimes(2);
+    if (storedAssociation?.source === BookClubReadingCopySource.NONE) {
+      expect(storedAssociation.bookId).toBeNull();
+    } else {
+      expect(storedAssociation).toEqual(
+        expect.objectContaining({ source: BookClubReadingCopySource.PERSONAL, bookId }),
+      );
+    }
+    expect(storedAssociation?.id).toBe('first-association');
+  });
+
   it('clears a selection by retaining the member-work row and setting its source to none', async () => {
     readingCopyRepository.findOne.mockResolvedValue({
       id: 'existing-association',
@@ -275,14 +339,9 @@ describe('Book club reading-copy associations', () => {
 
     await service.clearReadingCopy(clubId, workId, userId);
 
-    expect(readingCopyRepository.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'existing-association',
-        memberId: membership.id,
-        workId,
-        bookId: null,
-        source: 'none',
-      }),
+    expect(readingCopyRepository.upsert).toHaveBeenCalledWith(
+      { memberId: membership.id, workId, bookId: null, source: 'none' },
+      ['memberId', 'workId'],
     );
   });
 });
