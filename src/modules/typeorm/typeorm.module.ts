@@ -33,6 +33,10 @@ import { AddFileSizeToBookFormat1790000000000 } from 'src/migrations/17900000000
 import { CreateUserPreferenceTable1790000000001 } from 'src/migrations/1790000000001-CreateUserPreferenceTable';
 import { UserPreferenceEntity } from 'src/modules/kindle/user-preference.entity';
 import { AddAudioTracksToBookFormat1790000000002 } from 'src/migrations/1790000000002-AddAudioTracksToBookFormat';
+import { CreateBookClubCore1790000000003 } from 'src/migrations/1790000000003-CreateBookClubCore';
+import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
+import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
+import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
 
 @Module({
   imports: [
@@ -71,6 +75,9 @@ import { AddAudioTracksToBookFormat1790000000002 } from 'src/migrations/17900000
             UserBookFavoriteEntity,
             BookDuplicateEntity,
             UserPreferenceEntity,
+            BookClubEntity,
+            BookClubMemberEntity,
+            BookClubWorkEntity,
           ],
           migrations: [
             SchemaUpdate1755566512418,
@@ -95,6 +102,7 @@ import { AddAudioTracksToBookFormat1790000000002 } from 'src/migrations/17900000
             AddFileSizeToBookFormat1790000000000,
             CreateUserPreferenceTable1790000000001,
             AddAudioTracksToBookFormat1790000000002,
+            CreateBookClubCore1790000000003,
           ],
           migrationsRun: true,
           migrationsTableName: 'migration_table',
