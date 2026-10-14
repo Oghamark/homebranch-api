@@ -112,6 +112,8 @@ export class BookMutationService {
       series: target.series ?? source.series,
       seriesPosition: target.seriesPosition ?? source.seriesPosition,
       isbn: target.isbn ?? source.isbn,
+      externalWorkId: target.externalWorkId ?? source.externalWorkId,
+      editionId: target.editionId ?? source.editionId,
       pageCount: target.pageCount ?? source.pageCount,
       publisher: target.publisher ?? source.publisher,
       language: target.language ?? source.language,
@@ -209,6 +211,8 @@ export class BookMutationService {
       splitFormat.fileContentHash,
       undefined,
       [splitFormat],
+      splitBookMetadata.externalWorkId,
+      splitBookMetadata.editionId,
     );
   }
 

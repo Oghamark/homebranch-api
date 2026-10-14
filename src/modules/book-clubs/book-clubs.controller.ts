@@ -21,6 +21,7 @@ import { TransferBookClubOwnershipDto } from 'src/modules/book-clubs/dto/transfe
 import { UpdateBookClubMemberDto } from 'src/modules/book-clubs/dto/update-book-club-member.dto';
 import { UpdateBookClubDto } from 'src/modules/book-clubs/dto/update-book-club.dto';
 import { SetBookClubReadingCopyDto } from 'src/modules/book-clubs/dto/set-book-club-reading-copy.dto';
+import { ConfirmBookClubWorkMatchDto } from 'src/modules/book-clubs/dto/confirm-book-club-work-match.dto';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
 
@@ -58,6 +59,25 @@ export class BookClubsController {
     @Param('workId', ParseUUIDPipe) workId: string,
   ) {
     return this.bookClubsService.getReadingCopy(clubId, workId, currentUser.id);
+  }
+
+  @Get(':clubId/works/:workId/reading-copy/matches')
+  getWorkMatchCandidates(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('workId', ParseUUIDPipe) workId: string,
+  ) {
+    return this.bookClubsService.getWorkMatchCandidates(clubId, workId, currentUser.id);
+  }
+
+  @Post(':clubId/works/:workId/reading-copy/matches/confirm')
+  confirmWorkMatch(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('workId', ParseUUIDPipe) workId: string,
+    @Body() dto: ConfirmBookClubWorkMatchDto,
+  ) {
+    return this.bookClubsService.confirmWorkMatch(clubId, workId, currentUser.id, dto.bookId);
   }
 
   @Put(':clubId/works/:workId/reading-copy')

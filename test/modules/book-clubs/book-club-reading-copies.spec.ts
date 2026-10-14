@@ -52,7 +52,7 @@ describe('Book club reading-copy associations', () => {
       }
     },
   } as unknown as DataSource;
-  const bookService = { getBookById: jest.fn() } as unknown as jest.Mocked<BookService>;
+  const bookService = { getBookById: jest.fn(), getMatchingBooks: jest.fn() } as unknown as jest.Mocked<BookService>;
   let service: BookClubsService;
 
   beforeEach(() => {
@@ -88,7 +88,14 @@ describe('Book club reading-copy associations', () => {
 
     expect(bookService.getBookById).toHaveBeenCalledWith(bookId, userId, undefined);
     expect(readingCopyRepository.upsert).toHaveBeenCalledWith(
-      { memberId: membership.id, workId, bookId, source: 'shared' },
+      {
+        memberId: membership.id,
+        workId,
+        bookId,
+        source: 'shared',
+        associationMethod: 'manual_confirmation',
+        confidence: 1,
+      },
       ['memberId', 'workId'],
     );
     expect(result).toEqual({
@@ -97,6 +104,8 @@ describe('Book club reading-copy associations', () => {
       source: 'shared',
       available: true,
       book: { id: bookId, title: 'Available local edition', author: 'Author' },
+      associationMethod: 'manual_confirmation',
+      confidence: 1,
     });
     expect(JSON.stringify(result)).not.toContain('Private catalog summary');
     expect(JSON.stringify(result)).not.toContain('private-file.epub');
@@ -121,6 +130,89 @@ describe('Book club reading-copy associations', () => {
       book: { id: bookId, title: 'Available local edition', author: 'Author' },
     });
     expect(JSON.stringify(result)).not.toMatch(/summary|uploadedByUserId|formats|annotations|position|history/i);
+  });
+
+  it('returns only actor-owned Cloud candidates and requires confirmation without exposing file metadata', async () => {
+    process.env.CLOUD_MODE = 'true';
+    bookService.getMatchingBooks.mockResolvedValue([
+      {
+        id: bookId,
+        title: 'Selected logical work',
+        author: 'Author',
+        isbn: '9780000000000',
+        fileContentHash: 'private-hash',
+        formats: [{ fileName: 'private.epub' }],
+      } as never,
+    ]);
+
+    const result = await (
+      service as unknown as {
+        getWorkMatchCandidates: (club: string, work: string, user: string) => Promise<unknown[]>;
+      }
+    ).getWorkMatchCandidates(clubId, workId, userId);
+
+    expect(bookService.getMatchingBooks).toHaveBeenCalledWith(work, userId);
+    expect(result).toEqual([
+      {
+        bookId,
+        title: 'Selected logical work',
+        author: 'Author',
+        method: 'metadata_candidate',
+        confidence: 0.75,
+        confirmationRequired: true,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/private-hash|private\.epub|isbn|format/i);
+  });
+
+  it('persists identifier evidence only after the member confirms the candidate', async () => {
+    workRepository.findOne.mockResolvedValue({ ...work, externalWorkId: 'work-identifier' });
+    bookService.getMatchingBooks.mockResolvedValue([
+      { id: bookId, title: 'Translated title', author: 'Author', externalWorkId: 'work-identifier' } as never,
+    ]);
+    bookService.getBookById.mockResolvedValueOnce({
+      id: bookId,
+      title: 'Translated title',
+      author: 'Author',
+      externalWorkId: 'work-identifier',
+      formats: [],
+    } as never);
+
+    const result = await (
+      service as unknown as {
+        confirmWorkMatch: (club: string, work: string, user: string, book: string) => Promise<unknown>;
+      }
+    ).confirmWorkMatch(clubId, workId, userId, bookId);
+
+    expect(readingCopyRepository.upsert).toHaveBeenCalledWith(
+      {
+        memberId: membership.id,
+        workId,
+        bookId,
+        source: 'personal',
+        associationMethod: 'identifier',
+        confidence: 1,
+      },
+      ['memberId', 'workId'],
+    );
+    expect(result).toMatchObject({ associationMethod: 'identifier', confidence: 1, book: { id: bookId } });
+  });
+
+  it('does not return match candidates if private-club membership is revoked during lookup', async () => {
+    clubRepository.findOne.mockResolvedValue({ ...club, visibility: BookClubVisibility.PRIVATE });
+    memberRepository.findOne.mockResolvedValueOnce(membership).mockResolvedValueOnce(undefined);
+    bookService.getMatchingBooks.mockResolvedValue([
+      { id: bookId, title: 'Selected logical work', author: 'Author' } as never,
+    ]);
+
+    await expect(
+      (
+        service as unknown as {
+          getWorkMatchCandidates: (club: string, work: string, user: string) => Promise<unknown[]>;
+        }
+      ).getWorkMatchCandidates(clubId, workId, userId),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(bookService.getMatchingBooks).toHaveBeenCalledWith(work, userId);
   });
 
   it('revalidates private-club membership after the book lookup before returning a copy', async () => {
@@ -204,7 +296,14 @@ describe('Book club reading-copy associations', () => {
 
     expect(readingCopyRepository.upsert).toHaveBeenNthCalledWith(
       2,
-      { memberId: membership.id, workId, bookId, source: 'personal' },
+      {
+        memberId: membership.id,
+        workId,
+        bookId,
+        source: 'personal',
+        associationMethod: 'manual_confirmation',
+        confidence: 1,
+      },
       ['memberId', 'workId'],
     );
   });
@@ -270,7 +369,14 @@ describe('Book club reading-copy associations', () => {
       await service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.PERSONAL, bookId });
       expect(bookService.getBookById).toHaveBeenCalledWith(bookId, userId, userId);
       expect(readingCopyRepository.upsert).toHaveBeenCalledWith(
-        { memberId: membership.id, workId, bookId, source: 'personal' },
+        {
+          memberId: membership.id,
+          workId,
+          bookId,
+          source: 'personal',
+          associationMethod: 'manual_confirmation',
+          confidence: 1,
+        },
         ['memberId', 'workId'],
       );
     } finally {
@@ -427,7 +533,14 @@ describe('Book club reading-copy associations', () => {
       lock: { mode: 'pessimistic_write' },
     });
     expect(readingCopyRepository.upsert).toHaveBeenCalledWith(
-      { memberId: membership.id, workId, bookId: null, source: 'none' },
+      {
+        memberId: membership.id,
+        workId,
+        bookId: null,
+        source: 'none',
+        associationMethod: null,
+        confidence: null,
+      },
       ['memberId', 'workId'],
     );
   });

@@ -39,6 +39,14 @@ export class UpdateBookRequest {
   isbn?: string;
 
   @IsOptional()
+  @IsString()
+  externalWorkId?: string;
+
+  @IsOptional()
+  @IsString()
+  editionId?: string;
+
+  @IsOptional()
   @IsNumber()
   pageCount?: number;
 

@@ -1,6 +1,7 @@
 import { DataSource, EntityManager, getMetadataArgsStorage } from 'typeorm';
 import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
+import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
 import { BookClubRole, BookClubStatus, BookClubVisibility } from 'src/modules/book-clubs/book-club.types';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
@@ -26,10 +27,14 @@ describe('BookClubsService', () => {
     findOne: jest.fn<Promise<unknown>, [unknown]>(),
     find: jest.fn<Promise<unknown[]>, [unknown]>(),
   };
+  const readingCopyRepository = {
+    upsert: jest.fn<Promise<unknown>, [unknown, unknown]>(),
+  };
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
     [BookClubMemberEntity, memberRepository],
     [BookClubWorkEntity, workRepository],
+    [BookClubReadingCopyEntity, readingCopyRepository],
   ]);
   const manager = {
     getRepository: (entity: unknown) => repositories.get(entity),
@@ -45,6 +50,7 @@ describe('BookClubsService', () => {
     clubRepository.findOne.mockReset().mockResolvedValue(undefined);
     memberRepository.findOne.mockReset().mockResolvedValue(undefined);
     workRepository.findOne.mockReset().mockResolvedValue(undefined);
+    readingCopyRepository.upsert.mockReset().mockResolvedValue({});
     clubRepository.find.mockReset().mockResolvedValue([]);
     clubRepository.delete.mockReset().mockResolvedValue({ affected: 1 });
     memberRepository.find.mockReset().mockResolvedValue([]);
@@ -264,6 +270,42 @@ describe('BookClubsService', () => {
     );
   });
 
+  it('clears omitted work identifiers when the selected logical work is replaced', async () => {
+    clubRepository.findOne.mockResolvedValue({
+      id: 'club-1',
+      ownerUserId: 'owner-1',
+      visibility: BookClubVisibility.PRIVATE,
+      status: BookClubStatus.ACTIVE,
+    });
+    memberRepository.findOne.mockResolvedValue({ clubId: 'club-1', userId: 'owner-1', role: BookClubRole.OWNER });
+    workRepository.findOne.mockResolvedValue({
+      id: 'work-1',
+      clubId: 'club-1',
+      title: 'Old work',
+      author: 'Author',
+      isbn: 'old-isbn',
+      externalWorkId: 'old-work-id',
+      editionId: 'old-edition-id',
+      series: 'Old series',
+      seriesPosition: 2,
+    });
+
+    await service.updateClub('club-1', 'owner-1', {
+      selectedWork: { title: 'New work', author: 'Author' },
+    });
+
+    expect(workRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'New work',
+        isbn: null,
+        externalWorkId: null,
+        editionId: null,
+        series: null,
+        seriesPosition: null,
+      }),
+    );
+  });
+
   it('does not expose a private club to a non-member, including an instance administrator', async () => {
     clubRepository.findOne.mockResolvedValue({
       id: 'club-1',
@@ -339,7 +381,15 @@ describe('BookClubsService', () => {
     const club = await service.createClub('user-owner', {
       name: 'Evening Readers',
       visibility: BookClubVisibility.PRIVATE,
-      selectedWork: { title: 'The Dispossessed', author: 'Ursula K. Le Guin' },
+      selectedWork: {
+        title: 'The Dispossessed',
+        author: 'Ursula K. Le Guin',
+        isbn: '9780061054884',
+        externalWorkId: 'openlibrary-work-123',
+        editionId: 'edition-456',
+        series: 'Hainish Cycle',
+        seriesPosition: 1,
+      },
     });
 
     expect(club.ownerUserId).toBe('user-owner');
@@ -351,9 +401,56 @@ describe('BookClubsService', () => {
         clubId: club.id,
         title: 'The Dispossessed',
         author: 'Ursula K. Le Guin',
+        isbn: '9780061054884',
+        externalWorkId: 'openlibrary-work-123',
+        editionId: 'edition-456',
+        series: 'Hainish Cycle',
+        seriesPosition: 1,
       }),
     );
     expect(workRepository.save.mock.calls[0][0]).not.toHaveProperty('bookId');
     expect(workRepository.save.mock.calls[0][0]).not.toHaveProperty('fileContentHash');
+  });
+
+  it('rejects confirming a match if the selected work changed before association persistence', async () => {
+    const initialWork = {
+      id: 'work-1',
+      clubId: 'club-1',
+      title: 'Original work',
+      author: 'Author',
+      externalWorkId: 'external-work-1',
+    };
+    const changedWork = { ...initialWork, title: 'Different work', externalWorkId: 'external-work-2' };
+    const club = {
+      id: 'club-1',
+      ownerUserId: 'owner-1',
+      visibility: BookClubVisibility.PRIVATE,
+      status: BookClubStatus.ACTIVE,
+    };
+    const member = { id: 'member-row-1', clubId: 'club-1', userId: 'member-1', role: BookClubRole.MEMBER };
+    const book = {
+      id: 'book-1',
+      title: 'Original work',
+      author: 'Author',
+      externalWorkId: 'external-work-1',
+      formats: [],
+    };
+    const bookService = {
+      getMatchingBooks: jest.fn().mockResolvedValue([book]),
+      getBookById: jest.fn().mockResolvedValue(book),
+    };
+    service = new BookClubsService(dataSource, bookService as never);
+    clubRepository.findOne.mockResolvedValue(club);
+    memberRepository.findOne.mockResolvedValue(member);
+    workRepository.findOne
+      .mockResolvedValueOnce(initialWork)
+      .mockResolvedValueOnce(initialWork)
+      .mockResolvedValueOnce(initialWork)
+      .mockResolvedValueOnce(changedWork);
+
+    await expect(service.confirmWorkMatch('club-1', 'work-1', 'member-1', 'book-1')).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(readingCopyRepository.upsert).not.toHaveBeenCalled();
   });
 });

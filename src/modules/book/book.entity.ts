@@ -32,6 +32,8 @@ export class BookEntity {
     fileContentHash?: string,
     metadataUpdatedAt?: Date,
     formats?: BookFormatEntity[],
+    externalWorkId?: string,
+    editionId?: string,
   ) {
     if (id !== undefined || title !== undefined || author !== undefined || fileName !== undefined) {
       if (!title || !author) {
@@ -65,6 +67,8 @@ export class BookEntity {
       this.fileContentHash = fileContentHash;
       this.metadataUpdatedAt = metadataUpdatedAt;
       this.formats = formats;
+      this.externalWorkId = externalWorkId;
+      this.editionId = editionId;
     }
   }
 
@@ -150,6 +154,12 @@ export class BookEntity {
 
   @Column({ name: 'file_content_hash', nullable: true })
   fileContentHash?: string;
+
+  @Column({ name: 'external_work_id', type: 'varchar', nullable: true })
+  externalWorkId?: string;
+
+  @Column({ name: 'edition_id', type: 'varchar', nullable: true })
+  editionId?: string;
 
   @Column({ name: 'metadata_updated_at', type: 'timestamp', nullable: true })
   metadataUpdatedAt?: Date;

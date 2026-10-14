@@ -31,6 +31,8 @@ describe('BookClubsController API', () => {
     transferOwnership: jest.fn(),
     deleteClub: jest.fn(),
     getReadingCopy: jest.fn(),
+    getWorkMatchCandidates: jest.fn(),
+    confirmWorkMatch: jest.fn(),
     setReadingCopy: jest.fn(),
     clearReadingCopy: jest.fn(),
   };
@@ -63,7 +65,13 @@ describe('BookClubsController API', () => {
       body: JSON.stringify({
         name: 'Evening Readers',
         visibility: 'private',
-        selectedWork: { title: 'The Dispossessed', author: 'Ursula K. Le Guin' },
+        selectedWork: {
+          title: 'The Dispossessed',
+          author: 'Ursula K. Le Guin',
+          isbn: '9780061054884',
+          externalWorkId: 'openlibrary-work-123',
+          editionId: 'edition-456',
+        },
       }),
     });
     const body: unknown = await response.json();
@@ -73,7 +81,13 @@ describe('BookClubsController API', () => {
     expect(service.createClub).toHaveBeenCalledWith('reader-1', {
       name: 'Evening Readers',
       visibility: 'private',
-      selectedWork: { title: 'The Dispossessed', author: 'Ursula K. Le Guin' },
+      selectedWork: {
+        title: 'The Dispossessed',
+        author: 'Ursula K. Le Guin',
+        isbn: '9780061054884',
+        externalWorkId: 'openlibrary-work-123',
+        editionId: 'edition-456',
+      },
     });
   });
 
@@ -172,6 +186,67 @@ describe('BookClubsController API', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ clubId, workId, source: 'none', available: false, book: null });
     expect(service.getReadingCopy).toHaveBeenCalledWith(clubId, workId, 'reader-1');
+  });
+
+  it('routes candidate discovery to the authenticated member without accepting a caller-supplied actor ID', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const workId = '123e4567-e89b-42d3-a456-426614174002';
+    service.getWorkMatchCandidates.mockResolvedValue([
+      {
+        bookId: '123e4567-e89b-42d3-a456-426614174003',
+        title: 'Personal edition',
+        author: 'Author',
+        method: 'identifier',
+        confidence: 1,
+        confirmationRequired: true,
+      },
+    ]);
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/works/${workId}/reading-copy/matches`, {
+      headers: { 'x-test-user': 'reader-1' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([
+      {
+        bookId: '123e4567-e89b-42d3-a456-426614174003',
+        title: 'Personal edition',
+        author: 'Author',
+        method: 'identifier',
+        confidence: 1,
+        confirmationRequired: true,
+      },
+    ]);
+    expect(service.getWorkMatchCandidates).toHaveBeenCalledWith(clubId, workId, 'reader-1');
+  });
+
+  it('requires a member action to confirm a suggested match', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const workId = '123e4567-e89b-42d3-a456-426614174002';
+    const bookId = '123e4567-e89b-42d3-a456-426614174003';
+    service.confirmWorkMatch.mockResolvedValue({
+      clubId,
+      workId,
+      source: 'personal',
+      available: true,
+      book: { id: bookId, title: 'Translated edition', author: 'Author' },
+      associationMethod: 'identifier',
+      confidence: 1,
+    });
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/works/${workId}/reading-copy/matches/confirm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'reader-1' },
+      body: JSON.stringify({ bookId }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      associationMethod: 'identifier',
+      confidence: 1,
+      book: { id: bookId },
+    });
+    expect(service.confirmWorkMatch).toHaveBeenCalledWith(clubId, workId, 'reader-1', bookId);
   });
 
   it('rejects unsupported sources and unexpected reading-copy fields', async () => {

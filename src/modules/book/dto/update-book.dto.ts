@@ -8,6 +8,8 @@ export class UpdateBookDto {
   series?: string;
   seriesPosition?: number;
   isbn?: string;
+  externalWorkId?: string;
+  editionId?: string;
   pageCount?: number;
   publisher?: string;
   language?: string;

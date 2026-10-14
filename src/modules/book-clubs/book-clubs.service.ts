@@ -16,18 +16,30 @@ import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
 import {
+  BookClubAssociationMethod,
   BookClubReadingCopySource,
   BookClubRole,
   BookClubStatus,
   BookClubVisibility,
 } from 'src/modules/book-clubs/book-club.types';
 import { BookService } from 'src/modules/book/catalog/book.service';
+import { matchBookClubWork } from 'src/modules/book-clubs/book-club-work-matcher';
+
+export interface BookClubWorkInput {
+  title: string;
+  author: string;
+  isbn?: string;
+  externalWorkId?: string;
+  editionId?: string;
+  series?: string;
+  seriesPosition?: number;
+}
 
 export interface CreateBookClubInput {
   name: string;
   visibility: BookClubVisibility;
   description?: string;
-  selectedWork: { title: string; author: string };
+  selectedWork: BookClubWorkInput;
 }
 
 export interface AddBookClubMemberInput {
@@ -39,7 +51,7 @@ export interface UpdateBookClubInput {
   name?: string;
   description?: string | null;
   visibility?: BookClubVisibility;
-  selectedWork?: { title: string; author: string };
+  selectedWork?: BookClubWorkInput;
 }
 
 export interface SetBookClubReadingCopyInput {
@@ -53,6 +65,17 @@ export interface BookClubReadingCopyState {
   source: BookClubReadingCopySource;
   available: boolean;
   book: { id: string; title: string; author: string } | null;
+  associationMethod?: BookClubAssociationMethod | null;
+  confidence?: number | null;
+}
+
+export interface BookClubWorkMatchCandidate {
+  bookId: string;
+  title: string;
+  author: string;
+  method: BookClubAssociationMethod.IDENTIFIER | BookClubAssociationMethod.METADATA_CANDIDATE;
+  confidence: number;
+  confirmationRequired: true;
 }
 
 @Injectable()
@@ -67,6 +90,11 @@ export class BookClubsService {
     workId: string,
     userId: string,
     input: SetBookClubReadingCopyInput,
+    evidence: { associationMethod: BookClubAssociationMethod; confidence: number } = {
+      associationMethod: BookClubAssociationMethod.MANUAL_CONFIRMATION,
+      confidence: 1,
+    },
+    workMatchSnapshot?: BookClubWorkEntity,
   ): Promise<BookClubReadingCopyState> {
     await this.dataSource.transaction(async (manager) => {
       const { club, actor } = await this.getVisibleClub(manager, clubId, userId);
@@ -97,17 +125,41 @@ export class BookClubsService {
       const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
       if (!work) throw new NotFoundException('Book club work not found');
 
+      let associationEvidence = evidence;
+      if (workMatchSnapshot) {
+        if (!sameWorkMatchMetadata(workMatchSnapshot, work)) {
+          throw new BadRequestException('Selected work changed; refresh match candidates before confirming');
+        }
+        const currentMatch = matchBookClubWork(work, [book]).find((match) => match.bookId === book.id);
+        if (!currentMatch) {
+          throw new BadRequestException('Book is no longer a match candidate; use manual association instead');
+        }
+        associationEvidence = {
+          associationMethod: currentMatch.method,
+          confidence: currentMatch.confidence,
+        };
+      }
+
       const repository = manager.getRepository(BookClubReadingCopyEntity);
-      await repository.upsert({ memberId: actor.id, workId, bookId: input.bookId, source: input.source }, [
-        'memberId',
-        'workId',
-      ]);
+      await repository.upsert(
+        {
+          memberId: actor.id,
+          workId,
+          bookId: input.bookId,
+          source: input.source,
+          associationMethod: associationEvidence.associationMethod,
+          confidence: associationEvidence.confidence,
+        },
+        ['memberId', 'workId'],
+      );
       return {
         clubId,
         workId,
         source: input.source,
         available: true,
         book: { id: book.id, title: book.title, author: book.author },
+        associationMethod: associationEvidence.associationMethod,
+        confidence: associationEvidence.confidence,
       };
     });
   }
@@ -137,6 +189,7 @@ export class BookClubsService {
             source: isCloudMode() ? BookClubReadingCopySource.NONE : association.source,
             available: false,
             book: null,
+            ...associationEvidence(association, isCloudMode()),
           },
         };
       }
@@ -173,7 +226,9 @@ export class BookClubsService {
       currentAssociation?.memberId === context.association.memberId &&
       currentAssociation?.workId === context.association.workId &&
       currentAssociation?.bookId === context.association.bookId &&
-      currentAssociation?.source === context.association.source;
+      currentAssociation?.source === context.association.source &&
+      currentAssociation?.associationMethod === context.association.associationMethod &&
+      currentAssociation?.confidence === context.association.confidence;
     if (!associationIsCurrent) {
       const source =
         !currentAssociation || currentAssociation.source === BookClubReadingCopySource.NONE || isCloudMode()
@@ -191,6 +246,7 @@ export class BookClubsService {
         source: isCloudMode() ? BookClubReadingCopySource.NONE : context.association.source,
         available: false,
         book: null,
+        ...associationEvidence(context.association, isCloudMode()),
       };
     }
 
@@ -200,7 +256,89 @@ export class BookClubsService {
       source: context.association.source,
       available: true,
       book: { id: lookup.book.id, title: lookup.book.title, author: lookup.book.author },
+      ...associationEvidence(context.association),
     };
+  }
+
+  async getWorkMatchCandidates(clubId: string, workId: string, userId: string): Promise<BookClubWorkMatchCandidate[]> {
+    return (await this.getWorkMatchCandidateSet(clubId, workId, userId)).candidates;
+  }
+
+  private async getWorkMatchCandidateSet(
+    clubId: string,
+    workId: string,
+    userId: string,
+  ): Promise<{ work: BookClubWorkEntity; candidates: BookClubWorkMatchCandidate[] }> {
+    const work = await this.dataSource.transaction(async (manager) => {
+      const { actor } = await this.getVisibleClub(manager, clubId, userId);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+
+      const selectedWork = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!selectedWork) throw new NotFoundException('Book club work not found');
+      return selectedWork;
+    });
+
+    if (!this.bookService) throw new Error('Book access service is not configured');
+    let books = await this.bookService.getMatchingBooks(work, userId);
+    let currentWork = await this.dataSource.transaction(async (manager) => {
+      const { actor } = await this.getVisibleClub(manager, clubId, userId);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+
+      const selectedWork = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!selectedWork) throw new NotFoundException('Book club work not found');
+      return selectedWork;
+    });
+
+    if (!sameWorkMatchMetadata(work, currentWork)) {
+      books = await this.bookService.getMatchingBooks(currentWork, userId);
+      const latestWork = await this.dataSource.transaction(async (manager) => {
+        const { actor } = await this.getVisibleClub(manager, clubId, userId);
+        if (!actor) throw new ForbiddenException('Book club membership required');
+
+        const selectedWork = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+        if (!selectedWork) throw new NotFoundException('Book club work not found');
+        return selectedWork;
+      });
+      if (!sameWorkMatchMetadata(currentWork, latestWork)) return { work: latestWork, candidates: [] };
+      currentWork = latestWork;
+    }
+
+    const booksById = new Map(books.map((book) => [book.id, book]));
+    const candidates = matchBookClubWork(currentWork, books).flatMap((match) => {
+      const book = booksById.get(match.bookId);
+      return book
+        ? [
+            {
+              ...match,
+              title: book.title,
+              author: book.author,
+              confirmationRequired: true as const,
+            },
+          ]
+        : [];
+    });
+    return { work: currentWork, candidates };
+  }
+
+  async confirmWorkMatch(
+    clubId: string,
+    workId: string,
+    userId: string,
+    bookId: string,
+  ): Promise<BookClubReadingCopyState> {
+    const { work, candidates } = await this.getWorkMatchCandidateSet(clubId, workId, userId);
+    const candidate = candidates.find((match) => match.bookId === bookId);
+    if (!candidate)
+      throw new BadRequestException('Book is not a current match candidate; use manual association instead');
+
+    return this.setReadingCopy(
+      clubId,
+      workId,
+      userId,
+      { source: BookClubReadingCopySource.PERSONAL, bookId },
+      { associationMethod: candidate.method, confidence: candidate.confidence },
+      work,
+    );
   }
 
   async clearReadingCopy(clubId: string, workId: string, userId: string): Promise<void> {
@@ -214,10 +352,17 @@ export class BookClubsService {
       if (!work) throw new NotFoundException('Book club work not found');
 
       const repository = manager.getRepository(BookClubReadingCopyEntity);
-      await repository.upsert({ memberId: actor.id, workId, bookId: null, source: BookClubReadingCopySource.NONE }, [
-        'memberId',
-        'workId',
-      ]);
+      await repository.upsert(
+        {
+          memberId: actor.id,
+          workId,
+          bookId: null,
+          source: BookClubReadingCopySource.NONE,
+          associationMethod: null,
+          confidence: null,
+        },
+        ['memberId', 'workId'],
+      );
     });
   }
 
@@ -387,8 +532,14 @@ export class BookClubsService {
         const workRepository = manager.getRepository(BookClubWorkEntity);
         const work = await workRepository.findOne({ where: { clubId } });
         if (!work) throw new NotFoundException('Book club not found');
-        work.title = input.selectedWork.title;
-        work.author = input.selectedWork.author;
+        Object.assign(work, {
+          ...input.selectedWork,
+          isbn: input.selectedWork.isbn ?? null,
+          externalWorkId: input.selectedWork.externalWorkId ?? null,
+          editionId: input.selectedWork.editionId ?? null,
+          series: input.selectedWork.series ?? null,
+          seriesPosition: input.selectedWork.seriesPosition ?? null,
+        });
         await workRepository.save(work);
       }
       return club;
@@ -458,10 +609,31 @@ export class BookClubsService {
       });
       await clubRepository.save(club);
       await memberRepository.save(memberRepository.create({ clubId: club.id, userId, role: BookClubRole.OWNER }));
-      const selectedWork = await workRepository.save(
-        workRepository.create({ clubId: club.id, title: input.selectedWork.title, author: input.selectedWork.author }),
-      );
+      const selectedWork = await workRepository.save(workRepository.create({ clubId: club.id, ...input.selectedWork }));
       return Object.assign(club, { selectedWork });
     });
   }
+}
+
+function sameWorkMatchMetadata(left: BookClubWorkEntity, right: BookClubWorkEntity): boolean {
+  return (
+    left.title === right.title &&
+    left.author === right.author &&
+    (left.isbn ?? null) === (right.isbn ?? null) &&
+    (left.externalWorkId ?? null) === (right.externalWorkId ?? null) &&
+    (left.editionId ?? null) === (right.editionId ?? null) &&
+    (left.series ?? null) === (right.series ?? null) &&
+    (left.seriesPosition ?? null) === (right.seriesPosition ?? null)
+  );
+}
+
+function associationEvidence(
+  association: BookClubReadingCopyEntity,
+  hideEvidence = false,
+): Pick<BookClubReadingCopyState, 'associationMethod' | 'confidence'> | Record<string, never> {
+  if (hideEvidence || !association.associationMethod) return {};
+  return {
+    associationMethod: association.associationMethod,
+    confidence: association.confidence ?? null,
+  };
 }
