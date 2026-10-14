@@ -2,16 +2,26 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { DataSource, EntityManager, In } from 'typeorm';
+import { isCloudMode } from 'src/common/utils/cloud';
 import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
+import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
-import { BookClubRole, BookClubStatus, BookClubVisibility } from 'src/modules/book-clubs/book-club.types';
+import {
+  BookClubReadingCopySource,
+  BookClubRole,
+  BookClubStatus,
+  BookClubVisibility,
+} from 'src/modules/book-clubs/book-club.types';
+import { BookService } from 'src/modules/book/catalog/book.service';
 
 export interface CreateBookClubInput {
   name: string;
@@ -32,9 +42,184 @@ export interface UpdateBookClubInput {
   selectedWork?: { title: string; author: string };
 }
 
+export interface SetBookClubReadingCopyInput {
+  source: BookClubReadingCopySource.SHARED | BookClubReadingCopySource.PERSONAL;
+  bookId: string;
+}
+
+export interface BookClubReadingCopyState {
+  clubId: string;
+  workId: string;
+  source: BookClubReadingCopySource;
+  available: boolean;
+  book: { id: string; title: string; author: string } | null;
+}
+
 @Injectable()
 export class BookClubsService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    @Optional() @Inject(BookService) private readonly bookService?: BookService,
+  ) {}
+
+  async setReadingCopy(
+    clubId: string,
+    workId: string,
+    userId: string,
+    input: SetBookClubReadingCopyInput,
+  ): Promise<BookClubReadingCopyState> {
+    await this.dataSource.transaction(async (manager) => {
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+      if (club.status !== BookClubStatus.ACTIVE) {
+        throw new ForbiddenException('Archived book clubs cannot be changed');
+      }
+
+      const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!work) throw new NotFoundException('Book club work not found');
+      if (input.source !== BookClubReadingCopySource.SHARED && input.source !== BookClubReadingCopySource.PERSONAL) {
+        throw new BadRequestException('Reading-copy source must be shared or personal');
+      }
+      if (isCloudMode() && input.source === BookClubReadingCopySource.SHARED) {
+        throw new ForbiddenException('Shared book copies are not available in Cloud');
+      }
+    });
+
+    if (!this.bookService) throw new Error('Book access service is not configured');
+    const book = await this.bookService.getBookById(input.bookId, userId, isCloudMode() ? userId : undefined);
+
+    return this.dataSource.transaction(async (manager) => {
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+      if (club.status !== BookClubStatus.ACTIVE) {
+        throw new ForbiddenException('Archived book clubs cannot be changed');
+      }
+      const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!work) throw new NotFoundException('Book club work not found');
+
+      const repository = manager.getRepository(BookClubReadingCopyEntity);
+      await repository.upsert({ memberId: actor.id, workId, bookId: input.bookId, source: input.source }, [
+        'memberId',
+        'workId',
+      ]);
+      return {
+        clubId,
+        workId,
+        source: input.source,
+        available: true,
+        book: { id: book.id, title: book.title, author: book.author },
+      };
+    });
+  }
+
+  async getReadingCopy(clubId: string, workId: string, userId: string): Promise<BookClubReadingCopyState> {
+    const context = await this.dataSource.transaction(async (manager) => {
+      const { actor } = await this.getVisibleClub(manager, clubId, userId);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+
+      const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!work) throw new NotFoundException('Book club work not found');
+      const association = await manager
+        .getRepository(BookClubReadingCopyEntity)
+        .findOne({ where: { memberId: actor.id, workId } });
+      if (!association || association.source === BookClubReadingCopySource.NONE) {
+        return {
+          kind: 'state' as const,
+          state: { clubId, workId, source: BookClubReadingCopySource.NONE, available: false, book: null },
+        };
+      }
+      if (!association.bookId) {
+        return {
+          kind: 'state' as const,
+          state: {
+            clubId,
+            workId,
+            source: isCloudMode() ? BookClubReadingCopySource.NONE : association.source,
+            available: false,
+            book: null,
+          },
+        };
+      }
+      if (isCloudMode() && association.source === BookClubReadingCopySource.SHARED) {
+        return {
+          kind: 'state' as const,
+          state: { clubId, workId, source: BookClubReadingCopySource.NONE, available: false, book: null },
+        };
+      }
+      return { kind: 'association' as const, association, bookId: association.bookId };
+    });
+    if (context.kind === 'state') return context.state;
+    if (!this.bookService) throw new Error('Book access service is not configured');
+
+    let lookup: { book: Awaited<ReturnType<BookService['getBookById']>> } | { error: unknown };
+    try {
+      lookup = { book: await this.bookService.getBookById(context.bookId, userId, isCloudMode() ? userId : undefined) };
+    } catch (error) {
+      lookup = { error };
+    }
+
+    const currentAssociation = await this.dataSource.transaction(async (manager) => {
+      const { actor } = await this.getVisibleClub(manager, clubId, userId);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+
+      const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!work) throw new NotFoundException('Book club work not found');
+
+      return manager.getRepository(BookClubReadingCopyEntity).findOne({ where: { memberId: actor.id, workId } });
+    });
+
+    const associationIsCurrent =
+      currentAssociation?.id === context.association.id &&
+      currentAssociation?.memberId === context.association.memberId &&
+      currentAssociation?.workId === context.association.workId &&
+      currentAssociation?.bookId === context.association.bookId &&
+      currentAssociation?.source === context.association.source;
+    if (!associationIsCurrent) {
+      const source =
+        !currentAssociation || currentAssociation.source === BookClubReadingCopySource.NONE || isCloudMode()
+          ? BookClubReadingCopySource.NONE
+          : currentAssociation.source;
+      return { clubId, workId, source, available: false, book: null };
+    }
+
+    if ('error' in lookup) {
+      if (!(lookup.error instanceof NotFoundException) && !(lookup.error instanceof ForbiddenException))
+        throw lookup.error;
+      return {
+        clubId,
+        workId,
+        source: isCloudMode() ? BookClubReadingCopySource.NONE : context.association.source,
+        available: false,
+        book: null,
+      };
+    }
+
+    return {
+      clubId,
+      workId,
+      source: context.association.source,
+      available: true,
+      book: { id: lookup.book.id, title: lookup.book.title, author: lookup.book.author },
+    };
+  }
+
+  async clearReadingCopy(clubId: string, workId: string, userId: string): Promise<void> {
+    return this.dataSource.transaction(async (manager) => {
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+      if (club.status !== BookClubStatus.ACTIVE) {
+        throw new ForbiddenException('Archived book clubs cannot be changed');
+      }
+      const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: workId, clubId } });
+      if (!work) throw new NotFoundException('Book club work not found');
+
+      const repository = manager.getRepository(BookClubReadingCopyEntity);
+      await repository.upsert({ memberId: actor.id, workId, bookId: null, source: BookClubReadingCopySource.NONE }, [
+        'memberId',
+        'workId',
+      ]);
+    });
+  }
 
   async joinClub(clubId: string, userId: string): Promise<BookClubMemberEntity> {
     return this.dataSource.transaction(async (manager) => {

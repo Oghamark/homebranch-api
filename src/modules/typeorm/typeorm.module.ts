@@ -37,6 +37,8 @@ import { CreateBookClubCore1790000000003 } from 'src/migrations/1790000000003-Cr
 import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
+import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
+import { CreateBookClubReadingCopy1790000000004 } from 'src/migrations/1790000000004-CreateBookClubReadingCopy';
 
 @Module({
   imports: [
@@ -78,6 +80,7 @@ import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-wo
             BookClubEntity,
             BookClubMemberEntity,
             BookClubWorkEntity,
+            BookClubReadingCopyEntity,
           ],
           migrations: [
             SchemaUpdate1755566512418,
@@ -103,6 +106,7 @@ import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-wo
             CreateUserPreferenceTable1790000000001,
             AddAudioTracksToBookFormat1790000000002,
             CreateBookClubCore1790000000003,
+            CreateBookClubReadingCopy1790000000004,
           ],
           migrationsRun: true,
           migrationsTableName: 'migration_table',

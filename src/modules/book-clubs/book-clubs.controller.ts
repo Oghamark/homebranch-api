@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -19,6 +20,7 @@ import { CreateBookClubDto } from 'src/modules/book-clubs/dto/create-book-club.d
 import { TransferBookClubOwnershipDto } from 'src/modules/book-clubs/dto/transfer-book-club-ownership.dto';
 import { UpdateBookClubMemberDto } from 'src/modules/book-clubs/dto/update-book-club-member.dto';
 import { UpdateBookClubDto } from 'src/modules/book-clubs/dto/update-book-club.dto';
+import { SetBookClubReadingCopyDto } from 'src/modules/book-clubs/dto/set-book-club-reading-copy.dto';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
 
@@ -47,6 +49,35 @@ export class BookClubsController {
   @Get(':clubId')
   getClub(@CurrentUser() currentUser: Express.User, @Param('clubId', ParseUUIDPipe) clubId: string) {
     return this.bookClubsService.getClub(clubId, currentUser.id);
+  }
+
+  @Get(':clubId/works/:workId/reading-copy')
+  getReadingCopy(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('workId', ParseUUIDPipe) workId: string,
+  ) {
+    return this.bookClubsService.getReadingCopy(clubId, workId, currentUser.id);
+  }
+
+  @Put(':clubId/works/:workId/reading-copy')
+  setReadingCopy(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('workId', ParseUUIDPipe) workId: string,
+    @Body() dto: SetBookClubReadingCopyDto,
+  ) {
+    return this.bookClubsService.setReadingCopy(clubId, workId, currentUser.id, dto);
+  }
+
+  @Delete(':clubId/works/:workId/reading-copy')
+  @HttpCode(204)
+  clearReadingCopy(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('workId', ParseUUIDPipe) workId: string,
+  ) {
+    return this.bookClubsService.clearReadingCopy(clubId, workId, currentUser.id);
   }
 
   @Patch(':clubId')

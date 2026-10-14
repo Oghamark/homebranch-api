@@ -30,6 +30,9 @@ describe('BookClubsController API', () => {
     archiveClub: jest.fn(),
     transferOwnership: jest.fn(),
     deleteClub: jest.fn(),
+    getReadingCopy: jest.fn(),
+    setReadingCopy: jest.fn(),
+    clearReadingCopy: jest.fn(),
   };
   let app: INestApplication;
   let baseUrl: string;
@@ -121,6 +124,88 @@ describe('BookClubsController API', () => {
     expect(bodyKeys).not.toContain('personalBookId');
   });
 
+  it('routes a member personal-copy choice for the specified logical work', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const workId = '123e4567-e89b-42d3-a456-426614174002';
+    const bookId = '123e4567-e89b-42d3-a456-426614174003';
+    service.setReadingCopy.mockResolvedValue({
+      clubId,
+      workId,
+      source: 'personal',
+      available: true,
+      book: { id: bookId, title: 'Personal book', author: 'Author' },
+    });
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/works/${workId}/reading-copy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'reader-1' },
+      body: JSON.stringify({ source: 'personal', bookId }),
+    });
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({
+      clubId,
+      workId,
+      source: 'personal',
+      available: true,
+      book: { id: bookId, title: 'Personal book', author: 'Author' },
+    });
+    expect(service.setReadingCopy).toHaveBeenCalledWith(clubId, workId, 'reader-1', { source: 'personal', bookId });
+  });
+
+  it('routes a member reading-copy state read for the requested logical work', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const workId = '123e4567-e89b-42d3-a456-426614174002';
+    service.getReadingCopy.mockResolvedValue({
+      clubId,
+      workId,
+      source: 'none',
+      available: false,
+      book: null,
+    });
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/works/${workId}/reading-copy`, {
+      headers: { 'x-test-user': 'reader-1' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ clubId, workId, source: 'none', available: false, book: null });
+    expect(service.getReadingCopy).toHaveBeenCalledWith(clubId, workId, 'reader-1');
+  });
+
+  it('rejects unsupported sources and unexpected reading-copy fields', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const workId = '123e4567-e89b-42d3-a456-426614174002';
+    const body = { source: 'none', bookId: '123e4567-e89b-42d3-a456-426614174003' };
+    const unsupportedSource = await fetch(`${baseUrl}/book-clubs/${clubId}/works/${workId}/reading-copy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'reader-1' },
+      body: JSON.stringify(body),
+    });
+    const extraField = await fetch(`${baseUrl}/book-clubs/${clubId}/works/${workId}/reading-copy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'reader-1' },
+      body: JSON.stringify({ ...body, source: 'personal', annotations: 'should not be accepted' }),
+    });
+
+    expect(unsupportedSource.status).toBe(400);
+    expect(extraField.status).toBe(400);
+    expect(service.setReadingCopy).not.toHaveBeenCalled();
+  });
+
+  it('clears the caller reading-copy choice for one logical work', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const workId = '123e4567-e89b-42d3-a456-426614174002';
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/works/${workId}/reading-copy`, {
+      method: 'DELETE',
+      headers: { 'x-test-user': 'reader-1' },
+    });
+
+    expect(response.status).toBe(204);
+    expect(service.clearReadingCopy).toHaveBeenCalledWith(clubId, workId, 'reader-1');
+  });
+
   it('requires authentication for club endpoints', async () => {
     const response = await fetch(`${baseUrl}/book-clubs`);
     expect(response.status).toBe(401);
@@ -150,6 +235,14 @@ describe('BookClubsController API', () => {
       },
       { method: 'POST', path: '/book-clubs/not-a-uuid/archive' },
       { method: 'DELETE', path: '/book-clubs/not-a-uuid' },
+      { method: 'GET', path: `/book-clubs/not-a-uuid/works/${validId}/reading-copy` },
+      { method: 'GET', path: `/book-clubs/${validId}/works/not-a-uuid/reading-copy` },
+      {
+        method: 'PUT',
+        path: `/book-clubs/${validId}/works/${validId}/reading-copy`,
+        body: { source: 'personal', bookId: 'not-a-uuid' },
+      },
+      { method: 'DELETE', path: `/book-clubs/${validId}/works/not-a-uuid/reading-copy` },
     ];
 
     for (const request of requests) {
@@ -173,6 +266,9 @@ describe('BookClubsController API', () => {
     expect(service.transferOwnership).not.toHaveBeenCalled();
     expect(service.archiveClub).not.toHaveBeenCalled();
     expect(service.deleteClub).not.toHaveBeenCalled();
+    expect(service.getReadingCopy).not.toHaveBeenCalled();
+    expect(service.setReadingCopy).not.toHaveBeenCalled();
+    expect(service.clearReadingCopy).not.toHaveBeenCalled();
   });
 
   it('rejects non-UUID add-member and ownership-transfer target IDs at the API boundary', async () => {
