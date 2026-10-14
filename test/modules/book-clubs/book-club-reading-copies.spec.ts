@@ -35,7 +35,7 @@ describe('Book club reading-copy associations', () => {
     upsert: jest.fn(),
     update: jest.fn(),
   };
-  const bookRepository = { findOne: jest.fn() };
+  const bookRepository = { findOne: jest.fn(), find: jest.fn() };
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
     [BookClubMemberEntity, memberRepository],
@@ -68,6 +68,9 @@ describe('Book club reading-copy associations', () => {
     memberRepository.findOne.mockReset().mockResolvedValue(membership);
     workRepository.findOne.mockResolvedValue(work);
     bookRepository.findOne.mockReset().mockResolvedValue({ id: bookId, uploadedByUserId: userId, deletedAt: null });
+    bookRepository.find
+      .mockReset()
+      .mockResolvedValue([{ id: bookId, title: 'Selected logical work', author: 'Author' }]);
     workRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
     readingCopyRepository.findOne.mockReset().mockResolvedValue(undefined);
     readingCopyRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
@@ -170,6 +173,88 @@ describe('Book club reading-copy associations', () => {
       },
     ]);
     expect(JSON.stringify(result)).not.toMatch(/private-hash|private\.epub|isbn|format/i);
+  });
+
+  it('revalidates Cloud candidate ownership and deletion after lookup before disclosing title or author', async () => {
+    process.env.CLOUD_MODE = 'true';
+    const matchingWork = { ...work, externalWorkId: 'shared-work-id' };
+    const candidates = ['book-1', 'book-2', 'book-3', 'book-4'].map((id) => ({
+      id,
+      title: `Candidate title ${id}`,
+      author: `Candidate author ${id}`,
+      externalWorkId: 'shared-work-id',
+    }));
+    let liveBooks: Array<{
+      id: string;
+      uploadedByUserId: string;
+      deletedAt: Date | null;
+      title?: string;
+      author?: string;
+    }> = candidates.map(({ id, title, author }) => ({ id, title, author, uploadedByUserId: userId, deletedAt: null }));
+    let workReadCount = 0;
+    let raceApplied = false;
+    const candidateBookFindOptions: unknown[] = [];
+    workRepository.findOne.mockImplementation(() => {
+      workReadCount += 1;
+      if (workReadCount === 2 && !raceApplied) {
+        raceApplied = true;
+        liveBooks = [
+          {
+            id: 'book-1',
+            uploadedByUserId: 'another-user',
+            deletedAt: null,
+            title: 'Candidate title book-1',
+            author: 'Candidate author book-1',
+          },
+          {
+            id: 'book-2',
+            uploadedByUserId: userId,
+            deletedAt: new Date(),
+            title: 'Candidate title book-2',
+            author: 'Candidate author book-2',
+          },
+          {
+            id: 'book-3',
+            uploadedByUserId: userId,
+            deletedAt: null,
+            title: 'Current title book-3',
+            author: 'Current author book-3',
+          },
+          {
+            id: 'book-4',
+            uploadedByUserId: userId,
+            deletedAt: null,
+            title: 'Current title book-4',
+            author: 'Current author book-4',
+          },
+        ];
+      }
+      return Promise.resolve(matchingWork);
+    });
+    bookRepository.find.mockImplementation((options: unknown) => {
+      candidateBookFindOptions.push(options);
+      return Promise.resolve(liveBooks.filter((book) => book.uploadedByUserId === userId && book.deletedAt === null));
+    });
+    bookService.getMatchingBooks.mockResolvedValue(candidates as never);
+
+    const result = await service.getWorkMatchCandidates(clubId, workId, userId);
+
+    expect(result.map((candidate) => candidate.bookId)).toEqual(['book-3', 'book-4']);
+    expect(result.map(({ title, author }) => [title, author])).toEqual([
+      ['Current title book-3', 'Current author book-3'],
+      ['Current title book-4', 'Current author book-4'],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/Candidate title book-[12]|Candidate author book-[12]/);
+    const queryOptions = candidateBookFindOptions[0] as {
+      where: Record<string, unknown>;
+      lock: { mode: string };
+    };
+    expect(queryOptions.where.uploadedByUserId).toBe(userId);
+    expect(queryOptions.where).toHaveProperty('deletedAt');
+    expect(queryOptions.lock.mode).toBe('pessimistic_write');
+
+    liveBooks = [];
+    await expect(service.getWorkMatchCandidates(clubId, workId, userId)).resolves.toEqual([]);
   });
 
   it('persists identifier evidence only after the member confirms the candidate', async () => {

@@ -326,7 +326,29 @@ export class BookClubsService {
           ]
         : [];
     });
-    return { work: currentWork, candidates };
+
+    if (!isCloudMode() || candidates.length === 0) return { work: currentWork, candidates };
+
+    const liveBooks = await this.dataSource.transaction(async (manager) => {
+      const { actor } = await this.getVisibleClub(manager, clubId, userId);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+
+      return manager.getRepository(BookEntity).find({
+        select: { id: true, title: true, author: true },
+        where: {
+          id: In(candidates.map((candidate) => candidate.bookId)),
+          uploadedByUserId: userId,
+          deletedAt: IsNull(),
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+    });
+    const liveBooksById = new Map(liveBooks.map((book) => [book.id, book]));
+    const authorizedCandidates = candidates.flatMap((candidate) => {
+      const book = liveBooksById.get(candidate.bookId);
+      return book ? [{ ...candidate, title: book.title, author: book.author }] : [];
+    });
+    return { work: currentWork, candidates: authorizedCandidates };
   }
 
   async confirmWorkMatch(
