@@ -13,3 +13,9 @@ export enum BookClubStatus {
   ACTIVE = 'active',
   ARCHIVED = 'archived',
 }
+
+export enum BookClubReadingCopySource {
+  NONE = 'none',
+  SHARED = 'shared',
+  PERSONAL = 'personal',
+}
