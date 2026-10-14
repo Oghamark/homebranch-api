@@ -12,6 +12,7 @@ import { randomUUID } from 'crypto';
 import { DataSource, EntityManager, In, IsNull } from 'typeorm';
 import { isCloudMode } from 'src/common/utils/cloud';
 import { BookEntity } from 'src/modules/book/book.entity';
+import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
 import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
@@ -131,22 +132,64 @@ export class BookClubsService {
         if (!sameWorkMatchMetadata(workMatchSnapshot, work)) {
           throw new BadRequestException('Selected work changed; refresh match candidates before confirming');
         }
-        const currentMatch = matchBookClubWork(work, [book]).find((match) => match.bookId === book.id);
-        if (!currentMatch) {
-          throw new BadRequestException('Book is no longer a match candidate; use manual association instead');
+        if (!isCloudMode()) {
+          const currentMatch = matchBookClubWork(work, [book]).find((match) => match.bookId === book.id);
+          if (!currentMatch) {
+            throw new BadRequestException('Book is no longer a match candidate; use manual association instead');
+          }
+          associationEvidence = {
+            associationMethod: currentMatch.method,
+            confidence: currentMatch.confidence,
+          };
         }
-        associationEvidence = {
-          associationMethod: currentMatch.method,
-          confidence: currentMatch.confidence,
-        };
       }
 
+      let responseBook = book;
       if (isCloudMode()) {
         const authorizedBook = await manager.getRepository(BookEntity).findOne({
+          select: {
+            id: true,
+            title: true,
+            author: true,
+            isbn: true,
+            externalWorkId: true,
+            editionId: true,
+            series: true,
+            seriesPosition: true,
+          },
           where: { id: input.bookId, uploadedByUserId: userId, deletedAt: IsNull() },
           lock: { mode: 'pessimistic_write' },
         });
         if (!authorizedBook) throw new NotFoundException('Book not found');
+        responseBook = authorizedBook;
+
+        if (workMatchSnapshot) {
+          authorizedBook.formats = await manager.getRepository(BookFormatEntity).find({
+            select: {
+              id: true,
+              bookId: true,
+              title: true,
+              author: true,
+              isbn: true,
+              externalWorkId: true,
+              editionId: true,
+              series: true,
+              seriesPosition: true,
+            },
+            where: { bookId: input.bookId },
+            lock: { mode: 'pessimistic_write' },
+          });
+          const currentMatch = matchBookClubWork(work, [authorizedBook]).find(
+            (match) => match.bookId === authorizedBook.id,
+          );
+          if (!currentMatch) {
+            throw new BadRequestException('Book is no longer a match candidate; use manual association instead');
+          }
+          associationEvidence = {
+            associationMethod: currentMatch.method,
+            confidence: currentMatch.confidence,
+          };
+        }
       }
 
       const repository = manager.getRepository(BookClubReadingCopyEntity);
@@ -166,7 +209,7 @@ export class BookClubsService {
         workId,
         source: input.source,
         available: true,
-        book: { id: book.id, title: book.title, author: book.author },
+        book: { id: responseBook.id, title: responseBook.title, author: responseBook.author },
         associationMethod: associationEvidence.associationMethod,
         confidence: associationEvidence.confidence,
       };
@@ -358,20 +401,20 @@ export class BookClubsService {
       const { actor } = await this.getVisibleClub(manager, clubId, userId);
       if (!actor) throw new ForbiddenException('Book club membership required');
 
-      return manager.getRepository(BookEntity).find({
-        select: { id: true, title: true, author: true },
-        where: {
-          id: In(candidates.map((candidate) => candidate.bookId)),
-          uploadedByUserId: userId,
-          deletedAt: IsNull(),
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
+      return this.getCloudMatchableBooks(
+        manager,
+        candidates.map((candidate) => candidate.bookId),
+        userId,
+      );
     });
     const liveBooksById = new Map(liveBooks.map((book) => [book.id, book]));
+    const liveMatchesById = new Map(matchBookClubWork(currentWork, liveBooks).map((match) => [match.bookId, match]));
     const authorizedCandidates = candidates.flatMap((candidate) => {
       const book = liveBooksById.get(candidate.bookId);
-      return book ? [{ ...candidate, title: book.title, author: book.author }] : [];
+      const match = liveMatchesById.get(candidate.bookId);
+      return book && match
+        ? [{ ...candidate, method: match.method, confidence: match.confidence, title: book.title, author: book.author }]
+        : [];
     });
     return { work: currentWork, candidates: authorizedCandidates };
   }
@@ -661,6 +704,54 @@ export class BookClubsService {
       throw new NotFoundException('Book club not found');
     }
     return { club, actor };
+  }
+
+  private async getCloudMatchableBooks(
+    manager: EntityManager,
+    bookIds: string[],
+    userId: string,
+  ): Promise<BookEntity[]> {
+    if (bookIds.length === 0) return [];
+
+    const books = await manager.getRepository(BookEntity).find({
+      select: {
+        id: true,
+        title: true,
+        author: true,
+        isbn: true,
+        externalWorkId: true,
+        editionId: true,
+        series: true,
+        seriesPosition: true,
+      },
+      where: { id: In(bookIds), uploadedByUserId: userId, deletedAt: IsNull() },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (books.length === 0) return [];
+
+    const formats = await manager.getRepository(BookFormatEntity).find({
+      select: {
+        id: true,
+        bookId: true,
+        title: true,
+        author: true,
+        isbn: true,
+        externalWorkId: true,
+        editionId: true,
+        series: true,
+        seriesPosition: true,
+      },
+      where: { bookId: In(books.map((book) => book.id)) },
+      lock: { mode: 'pessimistic_write' },
+    });
+    const formatsByBookId = new Map<string, BookFormatEntity[]>();
+    for (const format of formats) {
+      const bookFormats = formatsByBookId.get(format.bookId) ?? [];
+      bookFormats.push(format);
+      formatsByBookId.set(format.bookId, bookFormats);
+    }
+
+    return books.map((book) => Object.assign(book, { formats: formatsByBookId.get(book.id) ?? [] }));
   }
 
   async createClub(

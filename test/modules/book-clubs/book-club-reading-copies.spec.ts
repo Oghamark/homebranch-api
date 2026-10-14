@@ -1,6 +1,7 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { BookEntity } from 'src/modules/book/book.entity';
+import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
 import { BookService } from 'src/modules/book/catalog/book.service';
 import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
@@ -36,12 +37,14 @@ describe('Book club reading-copy associations', () => {
     update: jest.fn(),
   };
   const bookRepository = { findOne: jest.fn(), find: jest.fn() };
+  const bookFormatRepository = { find: jest.fn<Promise<unknown[]>, [unknown]>() };
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
     [BookClubMemberEntity, memberRepository],
     [BookClubWorkEntity, workRepository],
     [BookClubReadingCopyEntity, readingCopyRepository],
     [BookEntity, bookRepository],
+    [BookFormatEntity, bookFormatRepository],
   ]);
   const manager = { getRepository: (entity: unknown) => repositories.get(entity) } as unknown as EntityManager;
   let transactionDepth = 0;
@@ -71,6 +74,7 @@ describe('Book club reading-copy associations', () => {
     bookRepository.find
       .mockReset()
       .mockResolvedValue([{ id: bookId, title: 'Selected logical work', author: 'Author' }]);
+    bookFormatRepository.find.mockReset().mockResolvedValue([]);
     workRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
     readingCopyRepository.findOne.mockReset().mockResolvedValue(undefined);
     readingCopyRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
@@ -190,6 +194,7 @@ describe('Book club reading-copy associations', () => {
       deletedAt: Date | null;
       title?: string;
       author?: string;
+      externalWorkId?: string;
     }> = candidates.map(({ id, title, author }) => ({ id, title, author, uploadedByUserId: userId, deletedAt: null }));
     let workReadCount = 0;
     let raceApplied = false;
@@ -205,6 +210,7 @@ describe('Book club reading-copy associations', () => {
             deletedAt: null,
             title: 'Candidate title book-1',
             author: 'Candidate author book-1',
+            externalWorkId: 'shared-work-id',
           },
           {
             id: 'book-2',
@@ -212,6 +218,7 @@ describe('Book club reading-copy associations', () => {
             deletedAt: new Date(),
             title: 'Candidate title book-2',
             author: 'Candidate author book-2',
+            externalWorkId: 'shared-work-id',
           },
           {
             id: 'book-3',
@@ -219,6 +226,7 @@ describe('Book club reading-copy associations', () => {
             deletedAt: null,
             title: 'Current title book-3',
             author: 'Current author book-3',
+            externalWorkId: 'shared-work-id',
           },
           {
             id: 'book-4',
@@ -226,6 +234,7 @@ describe('Book club reading-copy associations', () => {
             deletedAt: null,
             title: 'Current title book-4',
             author: 'Current author book-4',
+            externalWorkId: 'shared-work-id',
           },
         ];
       }
@@ -288,6 +297,53 @@ describe('Book club reading-copy associations', () => {
       ['memberId', 'workId'],
     );
     expect(result).toMatchObject({ associationMethod: 'identifier', confidence: 1, book: { id: bookId } });
+  });
+
+  it('rejects Cloud confirmation when book matching metadata changes before the locked write', async () => {
+    process.env.CLOUD_MODE = 'true';
+    const matchingBook = {
+      id: bookId,
+      title: 'Selected logical work',
+      author: 'Author',
+      uploadedByUserId: userId,
+      deletedAt: null,
+    };
+    let currentBook = { ...matchingBook };
+    bookService.getMatchingBooks.mockResolvedValue([matchingBook as never]);
+    bookRepository.find.mockResolvedValue([matchingBook]);
+    bookService.getBookById.mockImplementation(() => {
+      currentBook = { ...currentBook, title: 'No longer a match' };
+      return Promise.resolve(matchingBook as never);
+    });
+    bookRepository.findOne.mockImplementation(() => Promise.resolve(currentBook));
+
+    await expect(service.confirmWorkMatch(clubId, workId, userId, bookId)).rejects.toMatchObject({ status: 400 });
+    expect(readingCopyRepository.upsert).not.toHaveBeenCalled();
+  });
+
+  it('recomputes Cloud candidate evidence from current locked format metadata', async () => {
+    process.env.CLOUD_MODE = 'true';
+    bookService.getMatchingBooks.mockResolvedValue([
+      {
+        id: bookId,
+        title: 'Different book title',
+        author: 'Author',
+        formats: [{ title: 'Selected logical work', author: 'Author' }],
+      } as never,
+    ]);
+    bookRepository.find.mockResolvedValue([
+      { id: bookId, title: 'Different book title', author: 'Author', uploadedByUserId: userId, deletedAt: null },
+    ]);
+    bookFormatRepository.find.mockResolvedValue([{ bookId, title: 'Changed format title', author: 'Author' }]);
+
+    await expect(service.getWorkMatchCandidates(clubId, workId, userId)).resolves.toEqual([]);
+
+    const formatQuery = bookFormatRepository.find.mock.calls[0][0] as {
+      where: { bookId: unknown };
+      lock: { mode: string };
+    };
+    expect(formatQuery.where.bookId).toBeDefined();
+    expect(formatQuery.lock.mode).toBe('pessimistic_write');
   });
 
   it('does not return match candidates if private-club membership is revoked during lookup', async () => {
