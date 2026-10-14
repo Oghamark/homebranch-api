@@ -9,8 +9,9 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
-import { DataSource, EntityManager, In } from 'typeorm';
+import { DataSource, EntityManager, In, IsNull } from 'typeorm';
 import { isCloudMode } from 'src/common/utils/cloud';
+import { BookEntity } from 'src/modules/book/book.entity';
 import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
@@ -138,6 +139,14 @@ export class BookClubsService {
           associationMethod: currentMatch.method,
           confidence: currentMatch.confidence,
         };
+      }
+
+      if (isCloudMode()) {
+        const authorizedBook = await manager.getRepository(BookEntity).findOne({
+          where: { id: input.bookId, uploadedByUserId: userId, deletedAt: IsNull() },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!authorizedBook) throw new NotFoundException('Book not found');
       }
 
       const repository = manager.getRepository(BookClubReadingCopyEntity);

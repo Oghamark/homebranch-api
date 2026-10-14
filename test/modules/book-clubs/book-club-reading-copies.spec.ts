@@ -35,12 +35,13 @@ describe('Book club reading-copy associations', () => {
     upsert: jest.fn(),
     update: jest.fn(),
   };
+  const bookRepository = { findOne: jest.fn() };
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
     [BookClubMemberEntity, memberRepository],
     [BookClubWorkEntity, workRepository],
     [BookClubReadingCopyEntity, readingCopyRepository],
-    [BookEntity, {}],
+    [BookEntity, bookRepository],
   ]);
   const manager = { getRepository: (entity: unknown) => repositories.get(entity) } as unknown as EntityManager;
   let transactionDepth = 0;
@@ -66,6 +67,7 @@ describe('Book club reading-copy associations', () => {
     clubRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
     memberRepository.findOne.mockReset().mockResolvedValue(membership);
     workRepository.findOne.mockResolvedValue(work);
+    bookRepository.findOne.mockReset().mockResolvedValue({ id: bookId, uploadedByUserId: userId, deletedAt: null });
     workRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
     readingCopyRepository.findOne.mockReset().mockResolvedValue(undefined);
     readingCopyRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
@@ -488,6 +490,43 @@ describe('Book club reading-copy associations', () => {
         },
         ['memberId', 'workId'],
       );
+    } finally {
+      delete process.env.CLOUD_MODE;
+    }
+  });
+
+  it('rejects a Cloud association when book ownership changes after lookup but before the write', async () => {
+    process.env.CLOUD_MODE = 'true';
+    let currentOwnerId = userId;
+    const lookedUpBook = {
+      id: bookId,
+      title: 'Available local edition',
+      author: 'Author',
+      uploadedByUserId: userId,
+      deletedAt: null,
+    };
+    bookService.getBookById.mockImplementation((id, _viewerUserId, ownerScope) => {
+      expect(ownerScope).toBe(userId);
+      currentOwnerId = 'reassigned-owner';
+      return Promise.resolve({ ...lookedUpBook, id } as never);
+    });
+    bookRepository.findOne.mockImplementation(({ where }: { where: { uploadedByUserId: string } }) =>
+      Promise.resolve(currentOwnerId === where.uploadedByUserId ? lookedUpBook : null),
+    );
+
+    try {
+      await expect(
+        service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.PERSONAL, bookId }),
+      ).rejects.toMatchObject({ status: 404 });
+
+      expect(bookRepository.findOne).toHaveBeenCalledTimes(1);
+      const [authorizationQuery] = bookRepository.findOne.mock.calls[0] as [
+        { where: { id: string; uploadedByUserId: string }; lock: { mode: string } },
+      ];
+      expect(authorizationQuery.where.id).toBe(bookId);
+      expect(authorizationQuery.where.uploadedByUserId).toBe(userId);
+      expect(authorizationQuery.lock.mode).toBe('pessimistic_write');
+      expect(readingCopyRepository.upsert).not.toHaveBeenCalled();
     } finally {
       delete process.env.CLOUD_MODE;
     }
