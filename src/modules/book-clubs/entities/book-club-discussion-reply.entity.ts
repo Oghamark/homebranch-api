@@ -5,7 +5,7 @@ export class BookClubDiscussionReplyEntity {
   @PrimaryGeneratedColumn('uuid') id: string;
   @Column({ name: 'club_id', type: 'uuid' }) clubId: string;
   @Column({ name: 'thread_id', type: 'uuid' }) threadId: string;
-  @Column({ name: 'author_user_id', type: 'uuid' }) authorUserId: string;
+  @Column({ name: 'author_user_id', type: 'varchar' }) authorUserId: string;
   @Column({ type: 'text' }) body: string;
   @Column({ type: 'boolean', default: false }) spoiler: boolean;
   @Column({ type: 'boolean', default: false }) hidden: boolean;

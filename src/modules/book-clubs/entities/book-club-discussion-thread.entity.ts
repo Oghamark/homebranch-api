@@ -5,7 +5,7 @@ import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, Unique, Updat
 export class BookClubDiscussionThreadEntity {
   @PrimaryGeneratedColumn('uuid') id: string;
   @Column({ name: 'club_id', type: 'uuid' }) clubId: string;
-  @Column({ name: 'author_user_id', type: 'uuid' }) authorUserId: string;
+  @Column({ name: 'author_user_id', type: 'varchar' }) authorUserId: string;
   @Column({ type: 'varchar', length: 160 }) title: string;
   @Column({ type: 'text' }) body: string;
   @Column({ type: 'boolean', default: false }) spoiler: boolean;
