@@ -813,6 +813,28 @@ export class BookClubsService {
     });
   }
 
+  async listArchivedClubs(userId: string): Promise<Array<BookClubEntity & { selectedWork: BookClubWorkEntity }>> {
+    return this.dataSource.transaction(async (manager) => {
+      const memberRepository = manager.getRepository(BookClubMemberEntity);
+      const clubRepository = manager.getRepository(BookClubEntity);
+      const workRepository = manager.getRepository(BookClubWorkEntity);
+      const memberships = await memberRepository.find({ where: { userId } });
+      if (memberships.length === 0) return [];
+
+      const clubs = await clubRepository.find({
+        where: { id: In(memberships.map((membership) => membership.clubId)), status: BookClubStatus.ARCHIVED },
+        order: { createdAt: 'DESC' },
+      });
+      if (clubs.length === 0) return [];
+
+      const works = await workRepository.find({ where: { clubId: In(clubs.map((club) => club.id)) } });
+      const worksByClub = new Map(works.map((work) => [work.clubId, work]));
+      return clubs
+        .filter((club) => worksByClub.has(club.id))
+        .map((club) => Object.assign(club, { selectedWork: worksByClub.get(club.id)! }));
+    });
+  }
+
   async archiveClub(clubId: string, userId: string): Promise<BookClubEntity> {
     return this.dataSource.transaction(async (manager) => {
       const clubRepository = manager.getRepository(BookClubEntity);
@@ -972,6 +994,21 @@ export class BookClubsService {
         }
       }
       return club;
+    });
+  }
+
+  async listMembers(clubId: string, userId: string): Promise<Array<{ userId: string; role: BookClubRole }>> {
+    return this.dataSource.transaction(async (manager) => {
+      const { actor } = await this.getVisibleClub(manager, clubId, userId, true);
+      if (!actor || (actor.role !== BookClubRole.OWNER && actor.role !== BookClubRole.MODERATOR)) {
+        throw new ForbiddenException('Club membership management permission required');
+      }
+      const members = await manager.getRepository(BookClubMemberEntity).find({
+        select: { userId: true, role: true },
+        where: { clubId },
+        order: { createdAt: 'ASC', id: 'ASC' },
+      });
+      return members.map(({ userId: memberUserId, role }) => ({ userId: memberUserId, role }));
     });
   }
 

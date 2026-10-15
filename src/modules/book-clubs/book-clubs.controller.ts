@@ -44,6 +44,11 @@ export class BookClubsController {
     private readonly discussions: BookClubDiscussionService,
   ) {}
 
+  @Get('archived')
+  listArchivedClubs(@CurrentUser() currentUser: Express.User) {
+    return this.bookClubsService.listArchivedClubs(currentUser.id);
+  }
+
   @Get()
   listClubs(@CurrentUser() currentUser: Express.User) {
     return this.bookClubsService.listClubs(currentUser.id);
@@ -164,6 +169,11 @@ export class BookClubsController {
   @Get(':clubId/discussion-audit')
   discussionAudit(@CurrentUser() user: Express.User, @Param('clubId', ParseUUIDPipe) clubId: string) {
     return this.discussions.getAudit(clubId, user.id);
+  }
+
+  @Get(':clubId/members')
+  listMembers(@CurrentUser() currentUser: Express.User, @Param('clubId', ParseUUIDPipe) clubId: string) {
+    return this.bookClubsService.listMembers(clubId, currentUser.id);
   }
 
   @Get(':clubId')
