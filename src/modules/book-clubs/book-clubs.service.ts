@@ -975,7 +975,10 @@ export class BookClubsService {
     });
   }
 
-  async getClub(clubId: string, userId: string): Promise<BookClubEntity & { selectedWork: BookClubWorkEntity }> {
+  async getClub(
+    clubId: string,
+    userId: string,
+  ): Promise<BookClubEntity & { selectedWork: BookClubWorkEntity; currentMembershipRole: BookClubRole | null }> {
     return this.dataSource.transaction(async (manager) => {
       const workRepository = manager.getRepository(BookClubWorkEntity);
       const { club, actor } = await this.getVisibleClub(manager, clubId, userId);
@@ -985,7 +988,7 @@ export class BookClubsService {
 
       const selectedWork = await workRepository.findOne({ where: { clubId } });
       if (!selectedWork) throw new NotFoundException('Book club not found');
-      return Object.assign(club, { selectedWork });
+      return Object.assign(club, { selectedWork, currentMembershipRole: actor?.role ?? null });
     });
   }
 
