@@ -9,6 +9,7 @@ import {
   IsString,
   Length,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { BookClubMilestoneKind } from 'src/modules/book-clubs/entities/book-club-milestone.entity';
@@ -35,7 +36,7 @@ export class UpdateBookClubScheduleDto {
   @IsDateString({ strict: true })
   completionDate?: string | null;
 
-  @IsOptional()
+  @ValidateIf((_, value) => value !== undefined)
   @IsArray()
   @ArrayMaxSize(100)
   @ValidateNested({ each: true })

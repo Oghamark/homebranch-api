@@ -536,19 +536,18 @@ export class BookClubsService {
       });
       const memberRepository = manager.getRepository(BookClubMemberEntity);
       const members = await memberRepository.find({ where: { clubId } });
-      const memberIds = members.map((member) => member.id);
-      const readingCopies = memberIds.length
-        ? await manager
-            .getRepository(BookClubReadingCopyEntity)
-            .find({ where: { memberId: In(memberIds), workId: work.id } })
-        : [];
+      const shareableMembers = members.filter((member) => member.id !== actor.id && member.progressSharingEnabled);
+      const selectedMemberIds = [actor.id, ...shareableMembers.map((member) => member.id)];
+      const readingCopies = await manager
+        .getRepository(BookClubReadingCopyEntity)
+        .find({ where: { memberId: In(selectedMemberIds), workId: work.id } });
       const selectedCopies = new Map(
         readingCopies
           .filter((copy) => copy.bookId && copy.source !== BookClubReadingCopySource.NONE)
           .map((copy) => [copy.memberId, copy]),
       );
 
-      if (isCloudMode() && selectedCopies.size > 0) {
+      if (selectedCopies.size > 0) {
         const selectedBookIds = [...selectedCopies.values()].map((copy) => copy.bookId!);
         const books = await manager.getRepository(BookEntity).find({
           select: { id: true, uploadedByUserId: true },
@@ -556,35 +555,17 @@ export class BookClubsService {
           lock: { mode: 'pessimistic_write' },
         });
         const authorizedBookOwners = new Map(books.map((book) => [book.id, book.uploadedByUserId]));
-        for (const member of members) {
+        for (const member of [actor, ...shareableMembers]) {
           const copy = selectedCopies.get(member.id);
           if (
             copy &&
-            (copy.source !== BookClubReadingCopySource.PERSONAL ||
-              authorizedBookOwners.get(copy.bookId!) !== member.userId)
+            (!authorizedBookOwners.has(copy.bookId!) ||
+              (isCloudMode() &&
+                (copy.source !== BookClubReadingCopySource.PERSONAL ||
+                  authorizedBookOwners.get(copy.bookId!) !== member.userId)))
           ) {
             selectedCopies.delete(member.id);
           }
-        }
-      } else if (!isCloudMode() && selectedCopies.size > 0) {
-        const bookService = this.bookService;
-        if (!bookService) throw new Error('Book access service is not configured');
-        const membersById = new Map(members.map((member) => [member.id, member]));
-        const inaccessibleMemberIds = await Promise.all(
-          [...selectedCopies.entries()].map(async ([memberId, copy]) => {
-            const selectedMember = membersById.get(memberId);
-            if (!selectedMember) return memberId;
-            try {
-              await bookService.getBookById(copy.bookId!, selectedMember.userId);
-              return null;
-            } catch (error) {
-              if (error instanceof NotFoundException || error instanceof ForbiddenException) return memberId;
-              throw error;
-            }
-          }),
-        );
-        for (const memberId of inaccessibleMemberIds) {
-          if (memberId) selectedCopies.delete(memberId);
         }
       }
 
@@ -594,29 +575,13 @@ export class BookClubsService {
       const myProgress = selectedCopies.has(actor.id)
         ? await progressRepository.find({ where: { memberId: actor.id, workId: work.id } })
         : [];
-      const shareableMembers = members.filter(
-        (member) => member.id !== actor.id && member.progressSharingEnabled && selectedCopies.has(member.id),
-      );
-      const sharedProgressRows = shareableMembers.length
+      const membersWithShareableProgress = shareableMembers.filter((member) => selectedCopies.has(member.id));
+      const sharedProgressRows = membersWithShareableProgress.length
         ? await progressRepository.find({
-            where: { memberId: In(shareableMembers.map((member) => member.id)), workId: work.id },
+            where: { memberId: In(membersWithShareableProgress.map((member) => member.id)), workId: work.id },
           })
         : [];
-      if (!isCloudMode() && selectedCopies.size > 0) {
-        const books = await manager.getRepository(BookEntity).find({
-          select: { id: true },
-          where: {
-            id: In([...new Set([...selectedCopies.values()].map((copy) => copy.bookId!))]),
-            deletedAt: IsNull(),
-          },
-          lock: { mode: 'pessimistic_write' },
-        });
-        const availableBookIds = new Set(books.map((book) => book.id));
-        for (const [memberId, copy] of selectedCopies) {
-          if (!availableBookIds.has(copy.bookId!)) selectedCopies.delete(memberId);
-        }
-      }
-      const sharedProgress = shareableMembers.flatMap((member) => {
+      const sharedProgress = membersWithShareableProgress.flatMap((member) => {
         if (!selectedCopies.has(member.id)) return [];
         const memberProgress = sharedProgressRows
           .filter((progress) => progress.memberId === member.id)
@@ -648,6 +613,8 @@ export class BookClubsService {
   }
 
   async updateSchedule(clubId: string, userId: string, input: UpdateBookClubScheduleInput) {
+    if ((input.milestones as unknown) === null)
+      throw new BadRequestException('Milestones must be an array when provided');
     return this.dataSource.transaction(async (manager) => {
       const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
       if (!actor) throw new ForbiddenException('Book club membership required');
@@ -724,7 +691,7 @@ export class BookClubsService {
     return this.dataSource.transaction(async (manager) => {
       const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
       if (!actor) throw new ForbiddenException('Book club membership required');
-      if (club.status !== BookClubStatus.ACTIVE) {
+      if (club.status !== BookClubStatus.ACTIVE && enabled) {
         throw new ForbiddenException('Archived book clubs cannot be changed');
       }
       actor.progressSharingEnabled = enabled;
@@ -1061,19 +1028,21 @@ export class BookClubsService {
     if (!copy?.bookId || copy.source === BookClubReadingCopySource.NONE) {
       throw new ForbiddenException('Select a reading copy before updating milestone progress');
     }
-    if (isCloudMode()) {
-      if (copy.source !== BookClubReadingCopySource.PERSONAL) {
-        throw new ForbiddenException('A currently authorized personal reading copy is required');
-      }
-      const book = await manager.getRepository(BookEntity).findOne({
-        select: { id: true },
-        where: { id: copy.bookId, uploadedByUserId: userId, deletedAt: IsNull() },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!book) throw new NotFoundException('Book not found');
-    } else {
-      if (!this.bookService) throw new Error('Book access service is not configured');
-      await this.bookService.getBookById(copy.bookId, userId);
+    if (isCloudMode() && copy.source !== BookClubReadingCopySource.PERSONAL) {
+      throw new ForbiddenException('A currently authorized personal reading copy is required');
+    }
+    const book = await manager.getRepository(BookEntity).findOne({
+      select: { id: true },
+      where: {
+        id: copy.bookId,
+        deletedAt: IsNull(),
+        ...(isCloudMode() ? { uploadedByUserId: userId } : {}),
+      },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!book) {
+      if (isCloudMode()) throw new NotFoundException('Book not found');
+      throw new ForbiddenException('A currently authorized reading copy is required');
     }
     return { actor, work };
   }

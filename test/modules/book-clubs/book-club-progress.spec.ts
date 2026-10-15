@@ -166,7 +166,7 @@ describe('Book club member progress privacy', () => {
     expect(progressRepository.upsert).not.toHaveBeenCalled();
   });
 
-  it('does not accept progress for a self-hosted shared copy after local read authorization is revoked', async () => {
+  it('does not accept progress for a self-hosted shared copy after it is no longer available', async () => {
     delete process.env.CLOUD_MODE;
     readingCopyRepository.findOne.mockResolvedValue({
       memberId: member.id,
@@ -174,12 +174,13 @@ describe('Book club member progress privacy', () => {
       bookId: 'private-book-id',
       source: 'shared',
     });
-    (bookService.getBookById as jest.Mock).mockRejectedValue(new ForbiddenException());
+    bookRepository.findOne.mockResolvedValue(null);
 
     await expect(
       progressService().setMilestoneProgress(clubId, milestoneId, userId, { status: 'in_progress' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(progressRepository.upsert).not.toHaveBeenCalled();
+    expect(bookService.getBookById).not.toHaveBeenCalled();
   });
 
   it('returns shared summaries only for opted-in members and excludes their reading-copy details', async () => {
@@ -214,6 +215,32 @@ describe('Book club member progress privacy', () => {
     );
   });
 
+  it('loads only the caller and opted-in members selected copies without using BookService during the schedule transaction', async () => {
+    const optedIn = { ...member, id: 'member-opted-in', userId: otherUserId, progressSharingEnabled: true };
+    const optedOut = { ...member, id: 'member-opted-out', userId: 'private-reader', progressSharingEnabled: false };
+    memberRepository.find.mockResolvedValue([member, optedIn, optedOut]);
+    readingCopyRepository.find.mockResolvedValue([
+      { memberId: member.id, workId, bookId: 'own-book-id', source: 'personal' },
+      { memberId: optedIn.id, workId, bookId: 'other-private-book-id', source: 'personal' },
+      { memberId: optedOut.id, workId, bookId: 'hidden-book-id', source: 'personal' },
+    ]);
+    progressRepository.find.mockResolvedValue([
+      { memberId: optedIn.id, milestoneId, status: 'completed', percentage: null },
+      { memberId: optedOut.id, milestoneId, status: 'in_progress', percentage: 65 },
+    ]);
+
+    const schedule = await progressService().getSchedule(clubId, userId);
+
+    const [readingCopyQuery] = readingCopyRepository.find.mock.calls[0] as [
+      { where: { memberId: { _value: string[] } } },
+    ];
+    expect(readingCopyQuery.where.memberId._value).toEqual([member.id, optedIn.id]);
+    expect(bookService.getBookById).not.toHaveBeenCalled();
+    expect(schedule.sharedProgress).toEqual([
+      { userId: otherUserId, milestones: [{ milestoneId, status: 'completed', percentage: null }] },
+    ]);
+  });
+
   it('suppresses opted-in shared progress when a self-hosted member’s selected book was soft-deleted', async () => {
     delete process.env.CLOUD_MODE;
     const optedIn = { ...member, id: 'member-opted-in', userId: otherUserId, progressSharingEnabled: true };
@@ -235,7 +262,13 @@ describe('Book club member progress privacy', () => {
 
     expect(schedule.sharedProgress).toEqual([]);
     expect(JSON.stringify(schedule)).not.toMatch(/deleted-book-id|cfi|pageNumber|timestamp|annotation|readingHistory/i);
-    expect(bookService.getBookById).toHaveBeenCalledWith('deleted-book-id', otherUserId);
+    expect(bookService.getBookById).not.toHaveBeenCalled();
+    expect(bookRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ deletedAt: expect.anything() }),
+        lock: { mode: 'pessimistic_write' },
+      }),
+    );
   });
 
   it('suppresses personal progress when a self-hosted member’s selected book was soft-deleted', async () => {
@@ -254,7 +287,7 @@ describe('Book club member progress privacy', () => {
     expect(JSON.stringify(schedule)).not.toMatch(/deleted-book-id|cfi|pageNumber|timestamp|annotation|readingHistory/i);
   });
 
-  it('suppresses personal and opted-in shared progress when access is revoked after authorization but before return', async () => {
+  it('suppresses caller and opted-in shared progress when the locked book access check cannot find their copies', async () => {
     delete process.env.CLOUD_MODE;
     const optedIn = { ...member, id: 'member-opted-in', userId: otherUserId, progressSharingEnabled: true };
     memberRepository.find.mockResolvedValue([member, optedIn]);
@@ -262,47 +295,14 @@ describe('Book club member progress privacy', () => {
       { memberId: member.id, workId, bookId: 'personal-book-id', source: 'personal' },
       { memberId: optedIn.id, workId, bookId: 'shared-book-id', source: 'shared' },
     ]);
-    let accessRevoked = false;
-    const events: string[] = [];
-    (bookService.getBookById as jest.Mock).mockImplementation((bookId: string) => {
-      events.push(`authorized:${bookId}`);
-      return Promise.resolve({ id: bookId });
-    });
-    bookRepository.find.mockImplementation(() => {
-      events.push('final-revalidate');
-      return Promise.resolve(accessRevoked ? [] : [{ id: 'personal-book-id' }, { id: 'shared-book-id' }]);
-    });
-    progressRepository.find.mockImplementation(({ where }: { where: { memberId: string } }) => {
-      events.push('progress-read');
-      accessRevoked = true;
-      return Promise.resolve([
-        {
-          memberId: where.memberId,
-          milestoneId,
-          status: where.memberId === member.id ? 'in_progress' : 'completed',
-          percentage: where.memberId === member.id ? 35 : null,
-        },
-      ]);
-    });
+    bookRepository.find.mockResolvedValue([]);
 
     const schedule = await progressService().getSchedule(clubId, userId);
 
-    expect(bookService.getBookById).toHaveBeenCalledWith('personal-book-id', userId);
-    expect(bookService.getBookById).toHaveBeenCalledWith('shared-book-id', otherUserId);
-    const [finalBookQueryArguments] = bookRepository.find.mock.calls as unknown as Array<
-      [
-        {
-          select: { id: boolean };
-          where: { id: unknown; deletedAt: unknown };
-          lock: { mode: string };
-        },
-      ]
-    >;
-    const [finalBookQuery] = finalBookQueryArguments;
-    expect(finalBookQuery).toMatchObject({ select: { id: true }, lock: { mode: 'pessimistic_write' } });
-    expect(finalBookQuery.where.id).toBeDefined();
-    expect(finalBookQuery.where.deletedAt).toBeDefined();
-    expect(events.indexOf('final-revalidate')).toBeGreaterThan(events.lastIndexOf('progress-read'));
+    expect(bookService.getBookById).not.toHaveBeenCalled();
+    expect(bookRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { id: true, uploadedByUserId: true }, lock: { mode: 'pessimistic_write' } }),
+    );
     expect(schedule.myProgress).toEqual([]);
     expect(schedule.sharedProgress).toEqual([]);
     expect(JSON.stringify(schedule)).not.toMatch(
@@ -315,6 +315,15 @@ describe('Book club member progress privacy', () => {
 
     expect(result).toEqual({ enabled: true });
     expect(memberRepository.save).toHaveBeenCalledWith(expect.objectContaining({ progressSharingEnabled: true }));
+  });
+
+  it('allows an archived-club member to disable progress sharing but not enable it', async () => {
+    clubRepository.findOne.mockResolvedValue({ ...club, status: BookClubStatus.ARCHIVED });
+
+    await expect(progressService().setProgressSharing(clubId, userId, false)).resolves.toEqual({ enabled: false });
+    await expect(progressService().setProgressSharing(clubId, userId, true)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(memberRepository.save).toHaveBeenCalledTimes(1);
+    expect(memberRepository.save).toHaveBeenCalledWith(expect.objectContaining({ progressSharingEnabled: false }));
   });
 
   it('clears edition-specific mappings and progress when a member clears their reading-copy choice', async () => {

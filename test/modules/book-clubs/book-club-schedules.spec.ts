@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
@@ -125,6 +125,15 @@ describe('Book club schedules', () => {
       scheduleService().updateSchedule(clubId, userId, { startDate: '2026-12-02', completionDate: '2026-12-01' }),
     ).rejects.toMatchObject({ status: 400 });
     expect(clubRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects null milestones instead of treating them as an empty replacement', async () => {
+    await expect(scheduleService().updateSchedule(clubId, userId, { milestones: null })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+
+    expect(clubRepository.save).not.toHaveBeenCalled();
+    expect(milestoneRepository.delete).not.toHaveBeenCalled();
   });
 
   function scheduleService(): {

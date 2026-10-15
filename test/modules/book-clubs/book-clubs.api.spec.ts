@@ -213,6 +213,27 @@ describe('BookClubsController API', () => {
     expect(service.updateSchedule).toHaveBeenCalledWith(clubId, 'club-moderator', schedule);
   });
 
+  it('rejects null milestones while allowing an empty milestone list', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    service.updateSchedule.mockResolvedValue({ clubId, startDate: null, completionDate: null, milestones: [] });
+
+    const nullResponse = await fetch(`${baseUrl}/book-clubs/${clubId}/schedule`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'club-moderator' },
+      body: JSON.stringify({ milestones: null }),
+    });
+    const emptyResponse = await fetch(`${baseUrl}/book-clubs/${clubId}/schedule`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'club-moderator' },
+      body: JSON.stringify({ milestones: [] }),
+    });
+
+    expect(nullResponse.status).toBe(400);
+    expect(emptyResponse.status).toBe(200);
+    expect(service.updateSchedule).toHaveBeenCalledTimes(1);
+    expect(service.updateSchedule).toHaveBeenCalledWith(clubId, 'club-moderator', { milestones: [] });
+  });
+
   it('routes member progress as a coarse summary and does not accept reading locations', async () => {
     const clubId = '123e4567-e89b-42d3-a456-426614174001';
     const milestoneId = '123e4567-e89b-42d3-a456-426614174002';
