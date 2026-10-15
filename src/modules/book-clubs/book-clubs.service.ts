@@ -566,6 +566,26 @@ export class BookClubsService {
             selectedCopies.delete(member.id);
           }
         }
+      } else if (!isCloudMode() && selectedCopies.size > 0) {
+        const bookService = this.bookService;
+        if (!bookService) throw new Error('Book access service is not configured');
+        const membersById = new Map(members.map((member) => [member.id, member]));
+        const inaccessibleMemberIds = await Promise.all(
+          [...selectedCopies.entries()].map(async ([memberId, copy]) => {
+            const selectedMember = membersById.get(memberId);
+            if (!selectedMember) return memberId;
+            try {
+              await bookService.getBookById(copy.bookId!, selectedMember.userId);
+              return null;
+            } catch (error) {
+              if (error instanceof NotFoundException || error instanceof ForbiddenException) return memberId;
+              throw error;
+            }
+          }),
+        );
+        for (const memberId of inaccessibleMemberIds) {
+          if (memberId) selectedCopies.delete(memberId);
+        }
       }
 
       const mappingRepository = manager.getRepository(BookClubMilestoneMappingEntity);

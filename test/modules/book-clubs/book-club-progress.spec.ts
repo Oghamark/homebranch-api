@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { BookEntity } from 'src/modules/book/book.entity';
 import { BookService } from 'src/modules/book/catalog/book.service';
@@ -8,6 +8,15 @@ import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-wo
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
 import { BookClubRole, BookClubStatus, BookClubVisibility } from 'src/modules/book-clubs/book-club.types';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
+
+type ScheduleProgress = {
+  myMappings: Array<{ milestoneId: string; memberLabel: string; memberPosition: number | null }>;
+  myProgress: Array<{ milestoneId: string; status: string; percentage: number | null }>;
+  sharedProgress: Array<{
+    userId: string;
+    milestones: Array<{ milestoneId: string; status: string; percentage: number | null }>;
+  }>;
+};
 
 describe('Book club member progress privacy', () => {
   const clubId = '123e4567-e89b-42d3-a456-426614174011';
@@ -199,6 +208,46 @@ describe('Book club member progress privacy', () => {
     );
   });
 
+  it('suppresses opted-in shared progress when a self-hosted member’s selected book was soft-deleted', async () => {
+    delete process.env.CLOUD_MODE;
+    const optedIn = { ...member, id: 'member-opted-in', userId: otherUserId, progressSharingEnabled: true };
+    memberRepository.find.mockResolvedValue([member, optedIn]);
+    readingCopyRepository.find.mockResolvedValue([
+      { memberId: member.id, workId, bookId: 'own-book-id', source: 'personal' },
+      { memberId: optedIn.id, workId, bookId: 'deleted-book-id', source: 'personal' },
+    ]);
+    progressRepository.find.mockResolvedValue([
+      { memberId: member.id, milestoneId, status: 'in_progress', percentage: 35 },
+      { memberId: optedIn.id, milestoneId, status: 'completed', percentage: null },
+    ]);
+    (bookService.getBookById as jest.Mock).mockImplementation((bookId: string) => {
+      if (bookId === 'deleted-book-id') throw new NotFoundException('Book not found');
+      return Promise.resolve({ id: bookId });
+    });
+
+    const schedule = await progressService().getSchedule(clubId, userId);
+
+    expect(schedule.sharedProgress).toEqual([]);
+    expect(JSON.stringify(schedule)).not.toMatch(/deleted-book-id|cfi|pageNumber|timestamp|annotation|readingHistory/i);
+    expect(bookService.getBookById).toHaveBeenCalledWith('deleted-book-id', otherUserId);
+  });
+
+  it('suppresses personal progress when a self-hosted member’s selected book was soft-deleted', async () => {
+    delete process.env.CLOUD_MODE;
+    readingCopyRepository.find.mockResolvedValue([
+      { memberId: member.id, workId, bookId: 'deleted-book-id', source: 'personal' },
+    ]);
+    progressRepository.find.mockResolvedValue([
+      { memberId: member.id, milestoneId, status: 'in_progress', percentage: 35 },
+    ]);
+    (bookService.getBookById as jest.Mock).mockRejectedValue(new NotFoundException('Book not found'));
+
+    const schedule = await progressService().getSchedule(clubId, userId);
+
+    expect(schedule.myProgress).toEqual([]);
+    expect(JSON.stringify(schedule)).not.toMatch(/deleted-book-id|cfi|pageNumber|timestamp|annotation|readingHistory/i);
+  });
+
   it('keeps progress sharing disabled until the member explicitly opts in', async () => {
     const result = await progressService().setProgressSharing(clubId, userId, true);
 
@@ -237,7 +286,7 @@ describe('Book club member progress privacy', () => {
     setMilestoneMapping: (club: string, milestone: string, user: string, input: unknown) => Promise<unknown>;
     setMilestoneProgress: (club: string, milestone: string, user: string, input: unknown) => Promise<unknown>;
     setProgressSharing: (club: string, user: string, enabled: boolean) => Promise<unknown>;
-    getSchedule: (club: string, user: string) => Promise<any>;
+    getSchedule: (club: string, user: string) => Promise<ScheduleProgress>;
   } {
     return service as unknown as ReturnType<typeof progressService>;
   }
