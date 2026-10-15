@@ -32,7 +32,7 @@ describe('Book club member progress privacy', () => {
   const workRepository = { findOne: jest.fn(), save: jest.fn() };
   const milestoneRepository = { findOne: jest.fn(), find: jest.fn(), delete: jest.fn() };
   const readingCopyRepository = { findOne: jest.fn(), find: jest.fn(), upsert: jest.fn(), update: jest.fn() };
-  const bookRepository = { findOne: jest.fn() };
+  const bookRepository = { findOne: jest.fn(), find: jest.fn() };
   const bookService = { getBookById: jest.fn() } as unknown as BookService;
   const progressRepository = { upsert: jest.fn(), find: jest.fn(), findOne: jest.fn(), delete: jest.fn() };
   const mappingRepository = { upsert: jest.fn(), find: jest.fn(), delete: jest.fn() };
@@ -80,6 +80,12 @@ describe('Book club member progress privacy', () => {
     readingCopyRepository.find.mockResolvedValue([]);
     readingCopyRepository.update.mockResolvedValue(undefined);
     bookRepository.findOne.mockResolvedValue({ id: 'private-book-id' });
+    bookRepository.find.mockResolvedValue([
+      { id: 'private-book-id' },
+      { id: 'other-private-book-id' },
+      { id: 'hidden-book-id' },
+      { id: 'own-book-id' },
+    ]);
     (bookService.getBookById as jest.Mock).mockResolvedValue({ id: 'private-book-id' });
     progressRepository.upsert.mockResolvedValue(undefined);
     progressRepository.find.mockResolvedValue([]);
@@ -246,6 +252,62 @@ describe('Book club member progress privacy', () => {
 
     expect(schedule.myProgress).toEqual([]);
     expect(JSON.stringify(schedule)).not.toMatch(/deleted-book-id|cfi|pageNumber|timestamp|annotation|readingHistory/i);
+  });
+
+  it('suppresses personal and opted-in shared progress when access is revoked after authorization but before return', async () => {
+    delete process.env.CLOUD_MODE;
+    const optedIn = { ...member, id: 'member-opted-in', userId: otherUserId, progressSharingEnabled: true };
+    memberRepository.find.mockResolvedValue([member, optedIn]);
+    readingCopyRepository.find.mockResolvedValue([
+      { memberId: member.id, workId, bookId: 'personal-book-id', source: 'personal' },
+      { memberId: optedIn.id, workId, bookId: 'shared-book-id', source: 'shared' },
+    ]);
+    let accessRevoked = false;
+    const events: string[] = [];
+    (bookService.getBookById as jest.Mock).mockImplementation((bookId: string) => {
+      events.push(`authorized:${bookId}`);
+      return Promise.resolve({ id: bookId });
+    });
+    bookRepository.find.mockImplementation(() => {
+      events.push('final-revalidate');
+      return Promise.resolve(accessRevoked ? [] : [{ id: 'personal-book-id' }, { id: 'shared-book-id' }]);
+    });
+    progressRepository.find.mockImplementation(({ where }: { where: { memberId: string } }) => {
+      events.push('progress-read');
+      accessRevoked = true;
+      return Promise.resolve([
+        {
+          memberId: where.memberId,
+          milestoneId,
+          status: where.memberId === member.id ? 'in_progress' : 'completed',
+          percentage: where.memberId === member.id ? 35 : null,
+        },
+      ]);
+    });
+
+    const schedule = await progressService().getSchedule(clubId, userId);
+
+    expect(bookService.getBookById).toHaveBeenCalledWith('personal-book-id', userId);
+    expect(bookService.getBookById).toHaveBeenCalledWith('shared-book-id', otherUserId);
+    const [finalBookQueryArguments] = bookRepository.find.mock.calls as unknown as Array<
+      [
+        {
+          select: { id: boolean };
+          where: { id: unknown; deletedAt: unknown };
+          lock: { mode: string };
+        },
+      ]
+    >;
+    const [finalBookQuery] = finalBookQueryArguments;
+    expect(finalBookQuery).toMatchObject({ select: { id: true }, lock: { mode: 'pessimistic_write' } });
+    expect(finalBookQuery.where.id).toBeDefined();
+    expect(finalBookQuery.where.deletedAt).toBeDefined();
+    expect(events.indexOf('final-revalidate')).toBeGreaterThan(events.lastIndexOf('progress-read'));
+    expect(schedule.myProgress).toEqual([]);
+    expect(schedule.sharedProgress).toEqual([]);
+    expect(JSON.stringify(schedule)).not.toMatch(
+      /personal-book-id|shared-book-id|cfi|pageNumber|timestamp|annotation|readingHistory/i,
+    );
   });
 
   it('keeps progress sharing disabled until the member explicitly opts in', async () => {

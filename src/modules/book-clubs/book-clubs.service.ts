@@ -602,7 +602,22 @@ export class BookClubsService {
             where: { memberId: In(shareableMembers.map((member) => member.id)), workId: work.id },
           })
         : [];
+      if (!isCloudMode() && selectedCopies.size > 0) {
+        const books = await manager.getRepository(BookEntity).find({
+          select: { id: true },
+          where: {
+            id: In([...new Set([...selectedCopies.values()].map((copy) => copy.bookId!))]),
+            deletedAt: IsNull(),
+          },
+          lock: { mode: 'pessimistic_write' },
+        });
+        const availableBookIds = new Set(books.map((book) => book.id));
+        for (const [memberId, copy] of selectedCopies) {
+          if (!availableBookIds.has(copy.bookId!)) selectedCopies.delete(memberId);
+        }
+      }
       const sharedProgress = shareableMembers.flatMap((member) => {
+        if (!selectedCopies.has(member.id)) return [];
         const memberProgress = sharedProgressRows
           .filter((progress) => progress.memberId === member.id)
           .map(({ milestoneId, status, percentage }) => ({ milestoneId, status, percentage: percentage ?? null }));
@@ -620,11 +635,13 @@ export class BookClubsService {
           memberLabel,
           memberPosition: memberPosition ?? null,
         })),
-        myProgress: myProgress.map(({ milestoneId, status, percentage }) => ({
-          milestoneId,
-          status,
-          percentage: percentage ?? null,
-        })),
+        myProgress: selectedCopies.has(actor.id)
+          ? myProgress.map(({ milestoneId, status, percentage }) => ({
+              milestoneId,
+              status,
+              percentage: percentage ?? null,
+            }))
+          : [],
         sharedProgress,
       };
     });
