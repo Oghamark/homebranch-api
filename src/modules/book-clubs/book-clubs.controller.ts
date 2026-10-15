@@ -25,6 +25,7 @@ import { UpdateBookClubDto } from 'src/modules/book-clubs/dto/update-book-club.d
 import { SetBookClubReadingCopyDto } from 'src/modules/book-clubs/dto/set-book-club-reading-copy.dto';
 import { ConfirmBookClubWorkMatchDto } from 'src/modules/book-clubs/dto/confirm-book-club-work-match.dto';
 import { UpdateBookClubScheduleDto } from 'src/modules/book-clubs/dto/update-book-club-schedule.dto';
+import { PatchBookClubScheduleDto } from 'src/modules/book-clubs/dto/patch-book-club-schedule.dto';
 import { SetBookClubMilestoneProgressDto } from 'src/modules/book-clubs/dto/set-book-club-milestone-progress.dto';
 import { SetBookClubMilestoneMappingDto } from 'src/modules/book-clubs/dto/set-book-club-milestone-mapping.dto';
 import { SetBookClubProgressSharingDto } from 'src/modules/book-clubs/dto/set-book-club-progress-sharing.dto';
@@ -77,6 +78,26 @@ export class BookClubsController {
   @Get(':clubId/discussion-recovery-targets')
   listDiscussionRecoveryTargets(@CurrentUser() user: Express.User, @Param('clubId', ParseUUIDPipe) clubId: string) {
     return this.discussions.listRecoveryTargets(clubId, user.id);
+  }
+
+  @Get(':clubId/discussions/:threadId')
+  getDiscussion(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('threadId', ParseUUIDPipe) threadId: string,
+    @Query('revealSpoilers') reveal?: string,
+  ) {
+    return this.discussions.getThread(clubId, threadId, user.id, reveal === 'true');
+  }
+
+  @Get(':clubId/discussion-replies/:replyId')
+  getDiscussionReply(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('replyId', ParseUUIDPipe) replyId: string,
+    @Query('revealSpoilers') reveal?: string,
+  ) {
+    return this.discussions.getReply(clubId, replyId, user.id, reveal === 'true');
   }
 
   @Post(':clubId/discussions')
@@ -193,6 +214,15 @@ export class BookClubsController {
     @Body() dto: UpdateBookClubScheduleDto,
   ) {
     return this.bookClubsService.updateSchedule(clubId, currentUser.id, dto);
+  }
+
+  @Patch(':clubId/schedule')
+  patchSchedule(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Body() dto: PatchBookClubScheduleDto,
+  ) {
+    return this.bookClubsService.patchSchedule(clubId, currentUser.id, dto);
   }
 
   @Put(':clubId/progress-sharing')

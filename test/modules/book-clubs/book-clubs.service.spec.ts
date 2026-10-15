@@ -171,7 +171,9 @@ describe('BookClubsService', () => {
       { id: 'private-other', visibility: BookClubVisibility.PRIVATE, status: BookClubStatus.ACTIVE },
       { id: 'archived', visibility: BookClubVisibility.INSTANCE_VISIBLE, status: BookClubStatus.ARCHIVED },
     ]);
-    memberRepository.find.mockResolvedValue([{ clubId: 'private-member', userId: 'viewer' }]);
+    memberRepository.find.mockResolvedValue([
+      { clubId: 'private-member', userId: 'viewer', role: BookClubRole.MEMBER },
+    ]);
     workRepository.find.mockResolvedValue([
       { clubId: 'visible', title: 'Work A' },
       { clubId: 'private-member', title: 'Work B' },
@@ -180,11 +182,12 @@ describe('BookClubsService', () => {
     const clubs = await service.listClubs('viewer');
     expect(clubs.map((club) => club.id)).toEqual(['visible', 'private-member']);
     expect(clubs[1].selectedWork.title).toBe('Work B');
+    expect(clubs.map((club) => club.currentMembershipRole)).toEqual([null, BookClubRole.MEMBER]);
   });
 
   it('lists only archived clubs that the caller belongs to', async () => {
     memberRepository.find.mockResolvedValue([
-      { clubId: 'archived-member', userId: 'viewer' },
+      { clubId: 'archived-member', userId: 'viewer', role: BookClubRole.MODERATOR },
       { clubId: 'active-member', userId: 'viewer' },
     ]);
     clubRepository.find.mockResolvedValue([
@@ -199,6 +202,7 @@ describe('BookClubsService', () => {
       expect.objectContaining({
         id: 'archived-member',
         selectedWork: { clubId: 'archived-member', title: 'Archived work' },
+        currentMembershipRole: BookClubRole.MODERATOR,
       }),
     ]);
     expect(clubRepository.find).toHaveBeenCalledWith({

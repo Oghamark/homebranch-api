@@ -36,11 +36,31 @@ export class BookClubDiscussionService {
 
   async listThreads(clubId: string, userId: string, revealSpoilers = false) {
     return this.dataSource.transaction(async (manager) => {
-      await this.member(manager, clubId, userId, true);
+      await this.member(manager, clubId, userId, true, true);
       const rows = await manager
         .getRepository(BookClubDiscussionThreadEntity)
         .find({ where: { clubId }, order: { pinned: 'DESC', createdAt: 'DESC', id: 'DESC' } });
       return rows.filter((row) => !row.hidden && !row.deleted).map((row) => this.threadResponse(row, revealSpoilers));
+    });
+  }
+
+  async getThread(clubId: string, threadId: string, userId: string, revealSpoilers = false) {
+    return this.dataSource.transaction(async (manager) => {
+      await this.member(manager, clubId, userId, true, true);
+      const thread = await this.thread(manager, clubId, threadId);
+      if (thread.hidden || thread.deleted) throw new NotFoundException('Discussion thread not found');
+      return this.threadResponse(thread, revealSpoilers);
+    });
+  }
+
+  async getReply(clubId: string, replyId: string, userId: string, revealSpoilers = false) {
+    return this.dataSource.transaction(async (manager) => {
+      await this.member(manager, clubId, userId, true, true);
+      const reply = await this.reply(manager, clubId, replyId);
+      const thread = await this.thread(manager, clubId, reply.threadId);
+      if (reply.hidden || reply.deleted || thread.hidden || thread.deleted)
+        throw new NotFoundException('Discussion reply not found');
+      return this.replyResponse(reply, revealSpoilers);
     });
   }
 
@@ -92,7 +112,7 @@ export class BookClubDiscussionService {
 
   async listReplies(clubId: string, threadId: string, userId: string, revealSpoilers = false) {
     return this.dataSource.transaction(async (manager) => {
-      await this.member(manager, clubId, userId, true);
+      await this.member(manager, clubId, userId, true, true);
       const thread = await this.thread(manager, clubId, threadId);
       if (thread.hidden || thread.deleted) throw new NotFoundException('Discussion thread not found');
       const rows = await manager
@@ -235,11 +255,12 @@ export class BookClubDiscussionService {
     });
   }
 
-  private async member(manager: EntityManager, clubId: string, userId: string, lock = false) {
+  private async member(manager: EntityManager, clubId: string, userId: string, lock = false, allowArchived = false) {
     const club = await manager
       .getRepository(BookClubEntity)
       .findOne({ where: { id: clubId }, ...(lock ? { lock: { mode: 'pessimistic_write' as const } } : {}) });
-    if (!club || club.status !== BookClubStatus.ACTIVE) throw new NotFoundException('Book club not found');
+    if (!club || (!allowArchived && club.status !== BookClubStatus.ACTIVE))
+      throw new NotFoundException('Book club not found');
     const member = await manager.getRepository(BookClubMemberEntity).findOne({ where: { clubId, userId } });
     if (!member) {
       if (club.visibility === BookClubVisibility.PRIVATE) throw new NotFoundException('Book club not found');

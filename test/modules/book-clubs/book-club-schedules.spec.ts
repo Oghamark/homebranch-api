@@ -5,6 +5,7 @@ import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
 import { BookClubRole, BookClubStatus, BookClubVisibility } from 'src/modules/book-clubs/book-club.types';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
+import { BookClubMilestoneKind } from 'src/modules/book-clubs/entities/book-club-milestone.entity';
 
 describe('Book club schedules', () => {
   const clubId = '123e4567-e89b-42d3-a456-426614174001';
@@ -23,7 +24,7 @@ describe('Book club schedules', () => {
   const clubRepository = { findOne: jest.fn(), save: jest.fn() };
   const memberRepository = { findOne: jest.fn() };
   const workRepository = { findOne: jest.fn() };
-  const milestoneRepository = { find: jest.fn(), delete: jest.fn(), save: jest.fn() };
+  const milestoneRepository = { find: jest.fn(), delete: jest.fn(), save: jest.fn(), update: jest.fn() };
   class BookClubMilestoneEntity {}
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
@@ -134,6 +135,105 @@ describe('Book club schedules', () => {
 
     expect(clubRepository.save).not.toHaveBeenCalled();
     expect(milestoneRepository.delete).not.toHaveBeenCalled();
+  });
+
+  const retainedId = '123e4567-e89b-42d3-a456-426614174004';
+  const otherId = '123e4567-e89b-42d3-a456-426614174005';
+  const steps = [
+    { id: retainedId, workId, name: 'One', kind: BookClubMilestoneKind.PART, position: 1 },
+    { id: otherId, workId, name: 'Two', kind: BookClubMilestoneKind.CHAPTER, position: 2 },
+  ];
+
+  it('patches a date without replacing steps or deleting their dependent data', async () => {
+    milestoneRepository.find.mockResolvedValue(steps);
+    const result = await service.patchSchedule(clubId, userId, { completionDate: '2026-12-01' });
+    expect(result.milestones).toEqual(steps.map(({ workId: _workId, ...step }) => step));
+    expect(milestoneRepository.delete).not.toHaveBeenCalled();
+    expect(milestoneRepository.update).not.toHaveBeenCalled();
+    expect(milestoneRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('retains IDs on a swap using unused positive parking positions', async () => {
+    milestoneRepository.find.mockResolvedValue(steps);
+    const result = await service.patchSchedule(clubId, userId, {
+      milestones: steps.map((step) => ({ ...step, name: `${step.name} updated`, position: 3 - step.position })),
+    });
+    expect(milestoneRepository.delete).not.toHaveBeenCalled();
+    expect(milestoneRepository.update.mock.calls).toEqual([
+      [{ id: retainedId, workId }, { position: 3 }],
+      [{ id: otherId, workId }, { position: 4 }],
+    ]);
+    expect(result.milestones.map(({ id }) => id)).toEqual([otherId, retainedId]);
+  });
+
+  it('deletes only removed steps and generates IDs only for new steps', async () => {
+    milestoneRepository.find.mockResolvedValue(steps);
+    const result = await service.patchSchedule(clubId, userId, {
+      milestones: [
+        { ...steps[0], position: 2 },
+        { name: 'New checkpoint', kind: BookClubMilestoneKind.CHECKPOINT, position: 1 },
+      ],
+    });
+    expect(milestoneRepository.delete).toHaveBeenCalledTimes(1);
+    expect(milestoneRepository.delete).toHaveBeenCalledWith({ id: otherId, workId });
+    expect(result.milestones[1].id).toBe(retainedId);
+    expect(result.milestones[0].id).not.toBe(retainedId);
+  });
+
+  it('preserves dependent progress/mappings while persisting a swap against immediate uniqueness checks', async () => {
+    const removedId = '123e4567-e89b-42d3-a456-426614174006';
+    const stored = new Map(
+      [...steps, { ...steps[0], id: removedId, position: 3 }].map((step) => [step.id, { ...step }]),
+    );
+    const progress = new Map([...stored.keys()].map((id) => [id, { status: 'completed' }]));
+    const mappings = new Map([...stored.keys()].map((id) => [id, { memberLabel: 'Personal chapter' }]));
+    milestoneRepository.find.mockImplementation(() => Promise.resolve([...stored.values()].map((row) => ({ ...row }))));
+    milestoneRepository.delete.mockImplementation(({ id }: { id: string }) => {
+      stored.delete(id);
+      progress.delete(id);
+      mappings.delete(id);
+      return Promise.resolve();
+    });
+    const persist = (row: (typeof steps)[number]) => {
+      if (
+        row.position < 1 ||
+        [...stored.values()].some((other) => other.id !== row.id && other.position === row.position)
+      )
+        throw new Error('Unique positive position constraint violated');
+      stored.set(row.id, { ...row });
+      return row;
+    };
+    milestoneRepository.update.mockImplementation(({ id }: { id: string }, patch: { position: number }) =>
+      Promise.resolve(persist({ ...stored.get(id)!, ...patch })),
+    );
+    milestoneRepository.save.mockImplementation((rows: typeof steps) => Promise.resolve(rows.map(persist)));
+
+    await service.patchSchedule(clubId, userId, {
+      milestones: [
+        { ...steps[0], position: 2 },
+        { ...steps[1], position: 1 },
+        { name: 'New', kind: BookClubMilestoneKind.CHECKPOINT, position: 3 },
+      ],
+    });
+
+    expect([...progress.keys()]).toEqual([retainedId, otherId]);
+    expect([...mappings.keys()]).toEqual([retainedId, otherId]);
+    expect(stored.get(retainedId)?.position).toBe(2);
+    expect(stored.get(otherId)?.position).toBe(1);
+    expect(stored.size).toBe(3);
+  });
+
+  it.each([
+    [{ ...steps[0] }, { ...steps[0], position: 2 }],
+    [{ ...steps[0], id: '123e4567-e89b-42d3-a456-426614174099' }],
+    [{ ...steps[0], position: 2147483648 }],
+    [{ ...steps[0], position: 0 }],
+  ])('rejects invalid patch IDs or positions before any write: %p', async (...milestones) => {
+    milestoneRepository.find.mockResolvedValue(steps);
+    await expect(service.patchSchedule(clubId, userId, { milestones })).rejects.toBeInstanceOf(BadRequestException);
+    expect(clubRepository.save).not.toHaveBeenCalled();
+    expect(milestoneRepository.delete).not.toHaveBeenCalled();
+    expect(milestoneRepository.update).not.toHaveBeenCalled();
   });
 
   function scheduleService(): {

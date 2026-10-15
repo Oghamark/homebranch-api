@@ -613,6 +613,27 @@ export class BookClubsService {
   }
 
   async updateSchedule(clubId: string, userId: string, input: UpdateBookClubScheduleInput) {
+    return this.writeSchedule(clubId, userId, input, false);
+  }
+
+  async patchSchedule(
+    clubId: string,
+    userId: string,
+    input: Omit<UpdateBookClubScheduleInput, 'milestones'> & {
+      milestones?: Array<{ id?: string; name: string; kind: BookClubMilestoneKind; position: number }>;
+    },
+  ) {
+    return this.writeSchedule(clubId, userId, input, true);
+  }
+
+  private async writeSchedule(
+    clubId: string,
+    userId: string,
+    input: Omit<UpdateBookClubScheduleInput, 'milestones'> & {
+      milestones?: Array<{ id?: string; name: string; kind: BookClubMilestoneKind; position: number }>;
+    },
+    preserveIds: boolean,
+  ) {
     if ((input.milestones as unknown) === null)
       throw new BadRequestException('Milestones must be an array when provided');
     return this.dataSource.transaction(async (manager) => {
@@ -635,6 +656,7 @@ export class BookClubsService {
       }
 
       let work: BookClubWorkEntity | null = null;
+      let existing: BookClubMilestoneEntity[] = [];
       if (input.milestones !== undefined) {
         const positions = input.milestones.map(({ position }) => position);
         if (
@@ -652,6 +674,18 @@ export class BookClubsService {
         }
         work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { clubId } });
         if (!work) throw new NotFoundException('Book club work not found');
+        if (preserveIds) {
+          existing = await manager.getRepository(BookClubMilestoneEntity).find({ where: { workId: work.id } });
+          const ids = input.milestones.filter(({ id }) => id !== undefined).map(({ id }) => id);
+          if (
+            input.milestones.length > 100 ||
+            positions.some((position) => position > 2147483647) ||
+            new Set(ids).size !== ids.length ||
+            ids.some((id) => !existing.some((row) => row.id === id))
+          ) {
+            throw new BadRequestException('Milestone IDs must be unique and belong to this schedule');
+          }
+        }
       }
 
       club.startDate = startDate;
@@ -662,9 +696,31 @@ export class BookClubsService {
       if (input.milestones !== undefined && work) {
         const workId = work.id;
         const repository = manager.getRepository(BookClubMilestoneEntity);
-        await repository.delete({ workId });
+        if (preserveIds) {
+          const retainedIds = new Set(input.milestones.map(({ id }) => id));
+          for (const row of existing) {
+            if (!retainedIds.has(row.id)) await repository.delete({ id: row.id, workId });
+          }
+          // Park retained rows in unused positive positions before applying swaps.
+          const occupied = new Set([
+            ...existing.map(({ position }) => position),
+            ...input.milestones.map(({ position }) => position),
+          ]);
+          let parkingPosition = 1;
+          for (const row of existing.filter(({ id }) => retainedIds.has(id))) {
+            while (occupied.has(parkingPosition)) parkingPosition++;
+            await repository.update({ id: row.id, workId }, { position: parkingPosition });
+            occupied.add(parkingPosition++);
+          }
+        } else {
+          await repository.delete({ workId });
+        }
         milestones = await repository.save(
-          input.milestones.map((milestone) => ({ id: randomUUID(), workId, ...milestone })),
+          input.milestones.map(({ id, ...milestone }) => ({
+            ...milestone,
+            id: preserveIds && id !== undefined ? id : randomUUID(),
+            workId,
+          })),
         );
       } else if (input.milestones === undefined) {
         const selectedWork = await manager.getRepository(BookClubWorkEntity).findOne({ where: { clubId } });
@@ -790,7 +846,9 @@ export class BookClubsService {
     });
   }
 
-  async listClubs(userId: string): Promise<Array<BookClubEntity & { selectedWork: BookClubWorkEntity }>> {
+  async listClubs(
+    userId: string,
+  ): Promise<Array<BookClubEntity & { selectedWork: BookClubWorkEntity; currentMembershipRole: BookClubRole | null }>> {
     return this.dataSource.transaction(async (manager) => {
       const clubRepository = manager.getRepository(BookClubEntity);
       const memberRepository = manager.getRepository(BookClubMemberEntity);
@@ -800,6 +858,7 @@ export class BookClubsService {
         memberRepository.find({ where: { userId } }),
       ]);
       const memberClubIds = new Set(memberships.map((membership) => membership.clubId));
+      const rolesByClub = new Map(memberships.map((membership) => [membership.clubId, membership.role]));
       const visibleClubs = clubs.filter(
         (club) => club.visibility === BookClubVisibility.INSTANCE_VISIBLE || memberClubIds.has(club.id),
       );
@@ -809,16 +868,24 @@ export class BookClubsService {
       const worksByClub = new Map(works.map((work) => [work.clubId, work]));
       return visibleClubs
         .filter((club) => worksByClub.has(club.id))
-        .map((club) => Object.assign(club, { selectedWork: worksByClub.get(club.id)! }));
+        .map((club) =>
+          Object.assign(club, {
+            selectedWork: worksByClub.get(club.id)!,
+            currentMembershipRole: rolesByClub.get(club.id) ?? null,
+          }),
+        );
     });
   }
 
-  async listArchivedClubs(userId: string): Promise<Array<BookClubEntity & { selectedWork: BookClubWorkEntity }>> {
+  async listArchivedClubs(
+    userId: string,
+  ): Promise<Array<BookClubEntity & { selectedWork: BookClubWorkEntity; currentMembershipRole: BookClubRole | null }>> {
     return this.dataSource.transaction(async (manager) => {
       const memberRepository = manager.getRepository(BookClubMemberEntity);
       const clubRepository = manager.getRepository(BookClubEntity);
       const workRepository = manager.getRepository(BookClubWorkEntity);
       const memberships = await memberRepository.find({ where: { userId } });
+      const rolesByClub = new Map(memberships.map((membership) => [membership.clubId, membership.role]));
       if (memberships.length === 0) return [];
 
       const clubs = await clubRepository.find({
@@ -831,7 +898,12 @@ export class BookClubsService {
       const worksByClub = new Map(works.map((work) => [work.clubId, work]));
       return clubs
         .filter((club) => worksByClub.has(club.id))
-        .map((club) => Object.assign(club, { selectedWork: worksByClub.get(club.id)! }));
+        .map((club) =>
+          Object.assign(club, {
+            selectedWork: worksByClub.get(club.id)!,
+            currentMembershipRole: rolesByClub.get(club.id) ?? null,
+          }),
+        );
     });
   }
 

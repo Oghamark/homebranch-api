@@ -17,6 +17,8 @@ describe('discussion API', () => {
   let url: string;
   const discussion = {
     listThreads: jest.fn(),
+    getThread: jest.fn(),
+    getReply: jest.fn(),
     createThread: jest.fn(),
     listReplies: jest.fn(),
     createReply: jest.fn(),
@@ -46,6 +48,27 @@ describe('discussion API', () => {
   });
   afterAll(() => app.close());
   beforeEach(() => jest.clearAllMocks());
+  it.each([
+    ['discussions', 'getThread'],
+    ['discussion-replies', 'getReply'],
+  ] as const)('routes individual %s reads with explicit reveal only', async (path, method) => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const targetId = '123e4567-e89b-42d3-a456-426614174002';
+    discussion[method].mockResolvedValue({ id: targetId });
+    for (const query of ['', '?revealSpoilers=false', '?revealSpoilers=1', '?revealSpoilers=true']) {
+      const response = await fetch(`${url}/book-clubs/${clubId}/${path}/${targetId}${query}`, {
+        headers: { 'x-test-user': 'reader' },
+      });
+      expect(response.status).toBe(200);
+      expect(discussion[method]).toHaveBeenLastCalledWith(clubId, targetId, 'reader', query.endsWith('=true'));
+    }
+    const unauthenticated = await fetch(`${url}/book-clubs/${clubId}/${path}/${targetId}`);
+    expect(unauthenticated.status).toBe(401);
+    const malformed = await fetch(`${url}/book-clubs/${clubId}/${path}/bad-id`, {
+      headers: { 'x-test-user': 'reader' },
+    });
+    expect(malformed.status).toBe(400);
+  });
   it('routes spoiler reveal only when the query explicitly requests it', async () => {
     discussion.listThreads.mockResolvedValue([]);
     const id = '123e4567-e89b-42d3-a456-426614174001';

@@ -40,6 +40,7 @@ describe('BookClubsController API', () => {
     setReadingCopy: jest.fn(),
     clearReadingCopy: jest.fn(),
     updateSchedule: jest.fn(),
+    patchSchedule: jest.fn(),
     setMilestoneProgress: jest.fn(),
     setMilestoneMapping: jest.fn(),
     setProgressSharing: jest.fn(),
@@ -66,6 +67,37 @@ describe('BookClubsController API', () => {
 
   beforeEach(() => jest.clearAllMocks());
   afterAll(async () => app.close());
+
+  it('routes ID-aware schedule patches while keeping IDs invalid for legacy PUT', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const id = '123e4567-e89b-42d3-a456-426614174002';
+    const body = { milestones: [{ id, name: 'Retained step', kind: 'chapter', position: 1 }] };
+    service.patchSchedule.mockResolvedValue({ clubId, ...body });
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/schedule`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'owner' },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(200);
+    expect(service.patchSchedule).toHaveBeenCalledWith(clubId, 'owner', body);
+    const legacyResponse = await fetch(`${baseUrl}/book-clubs/${clubId}/schedule`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'owner' },
+      body: JSON.stringify(body),
+    });
+    expect(legacyResponse.status).toBe(400);
+    expect(service.updateSchedule).not.toHaveBeenCalled();
+  });
+
+  it.each([null, 'bad-id'])('rejects a malformed existing step ID %p in PATCH', async (id) => {
+    const response = await fetch(`${baseUrl}/book-clubs/123e4567-e89b-42d3-a456-426614174001/schedule`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'owner' },
+      body: JSON.stringify({ milestones: [{ id, name: 'Step', kind: 'part', position: 1 }] }),
+    });
+    expect(response.status).toBe(400);
+    expect(service.patchSchedule).not.toHaveBeenCalled();
+  });
 
   it('routes archive discovery to the authenticated caller before the club ID route', async () => {
     service.listArchivedClubs.mockResolvedValue([{ id: 'archived-club', status: 'archived' }]);

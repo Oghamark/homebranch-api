@@ -60,6 +60,9 @@ function fixture() {
     [BookClubModerationAuditEntity, repository(audits)],
   ]);
   return {
+    clubs,
+    members,
+    repositories,
     threads,
     replies,
     audits,
@@ -140,6 +143,87 @@ function concurrentReadFixture(changeMembership: () => RecordRow | null) {
 }
 
 describe('BookClubDiscussionService', () => {
+  it('reveals only the selected item and keeps default individual reads redacted under a club lock', async () => {
+    const { service, repositories } = fixture();
+    const thread = await service.createThread(ids.club, ids.member, {
+      title: 'Ending',
+      body: 'Thread secret',
+      spoiler: true,
+    });
+    const reply = await service.createReply(ids.club, thread.id, ids.member, { body: 'Reply secret', spoiler: true });
+    expect(await service.getThread(ids.club, thread.id, ids.member)).not.toHaveProperty('body');
+    expect(await service.getReply(ids.club, reply.id, ids.member)).not.toHaveProperty('body');
+    expect(await service.getThread(ids.club, thread.id, ids.member, true)).toHaveProperty('body', 'Thread secret');
+    expect(await service.getReply(ids.club, reply.id, ids.member, true)).toHaveProperty('body', 'Reply secret');
+    expect(repositories.get(BookClubEntity)!.findOne).toHaveBeenLastCalledWith({
+      where: { id: ids.club },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(await service.listThreads(ids.club, ids.member)).toEqual([
+      expect.not.objectContaining({ body: 'Thread secret' }),
+    ]);
+  });
+
+  it.each(['hidden', 'deleted'])(
+    'conceals individual %s content and replies below such parents even from moderators',
+    async (state) => {
+      const { service, threads, replies } = fixture();
+      const thread = await service.createThread(ids.club, ids.member, {
+        title: 'Title',
+        body: 'Thread secret',
+        spoiler: true,
+      });
+      const reply = await service.createReply(ids.club, thread.id, ids.member, { body: 'Reply secret', spoiler: true });
+      replies[0][state] = true;
+      await expect(service.getReply(ids.club, reply.id, ids.moderator, true)).rejects.toBeInstanceOf(NotFoundException);
+      replies[0][state] = false;
+      threads[0][state] = true;
+      await expect(service.getThread(ids.club, thread.id, ids.moderator, true)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      await expect(service.getReply(ids.club, reply.id, ids.moderator, true)).rejects.toBeInstanceOf(NotFoundException);
+    },
+  );
+
+  it('permits archived member reads but never archived writes or non-member reveals', async () => {
+    const { service, clubs } = fixture();
+    const thread = await service.createThread(ids.club, ids.member, {
+      title: 'Title',
+      body: 'Thread secret',
+      spoiler: true,
+    });
+    const reply = await service.createReply(ids.club, thread.id, ids.member, { body: 'Reply secret', spoiler: true });
+    clubs[0].status = BookClubStatus.ARCHIVED;
+    expect(await service.getThread(ids.club, thread.id, ids.member, true)).toHaveProperty('body', 'Thread secret');
+    expect(await service.getReply(ids.club, reply.id, ids.member, true)).toHaveProperty('body', 'Reply secret');
+    expect(await service.listThreads(ids.club, ids.member)).toHaveLength(1);
+    expect(await service.listReplies(ids.club, thread.id, ids.member)).toHaveLength(1);
+    await expect(service.createReply(ids.club, thread.id, ids.member, { body: 'Write' })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(service.getThread(ids.club, thread.id, ids.outsider, true)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.getReply(ids.otherClub, reply.id, ids.otherModerator, true)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it('denies visible-club non-members and revoked members individual spoiler reads', async () => {
+    const { service, clubs, members } = fixture();
+    const thread = await service.createThread(ids.club, ids.member, {
+      title: 'Title',
+      body: 'Thread secret',
+      spoiler: true,
+    });
+    const reply = await service.createReply(ids.club, thread.id, ids.member, { body: 'Reply secret', spoiler: true });
+    clubs[0].visibility = BookClubVisibility.INSTANCE_VISIBLE;
+    members.splice(
+      members.findIndex((member) => member.userId === ids.member),
+      1,
+    );
+    await expect(service.getThread(ids.club, thread.id, ids.member, true)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.getReply(ids.club, reply.id, ids.outsider, true)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it('conceals spoiler bodies unless a member explicitly reveals them', async () => {
     const { service } = fixture();
     const created = await service.createThread(ids.club, ids.member, {
