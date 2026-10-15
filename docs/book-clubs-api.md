@@ -40,6 +40,7 @@ All routes require the existing JWT authentication guard. The authenticated acco
 | `POST`   | `/book-clubs/:clubId/archive`                                    | Owner archives the club. Archived clubs are omitted from lists and cannot be joined or modified.                                                              |
 | `DELETE` | `/book-clubs/:clubId`                                            | Owner permanently deletes the club; member and selected-work rows are removed by the club foreign-key cascades.                                               |
 | `GET` | `/book-clubs/:clubId/discussions?revealSpoilers=true` | Member-only discussion list. Spoiler bodies are omitted unless the query is exactly `true`. |
+| `GET` | `/book-clubs/:clubId/discussion-recovery-targets` | Owner/moderator-only recoverable hidden/deleted discussion target list. Each item is `{ id, type: 'thread' \| 'reply', hidden, deleted }`; it intentionally excludes titles, bodies, spoiler flags, author IDs, and reply text. Ordered by creation time, ID, then type. |
 | `POST` | `/book-clubs/:clubId/discussions` | Member creates `{ title, body, spoiler? }`; only owner/moderator may set `promptKind: true`. |
 | `PATCH`/`DELETE` | `/book-clubs/:clubId/discussions/:threadId` | Author may edit/delete only own visible, unlocked thread. |
 | `GET`/`POST` | `/book-clubs/:clubId/discussions/:threadId/replies` | Member lists or creates replies; locked/hidden/deleted threads reject new replies. |

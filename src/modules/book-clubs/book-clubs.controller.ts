@@ -69,6 +69,11 @@ export class BookClubsController {
     return this.discussions.listThreads(clubId, user.id, reveal === 'true');
   }
 
+  @Get(':clubId/discussion-recovery-targets')
+  listDiscussionRecoveryTargets(@CurrentUser() user: Express.User, @Param('clubId', ParseUUIDPipe) clubId: string) {
+    return this.discussions.listRecoveryTargets(clubId, user.id);
+  }
+
   @Post(':clubId/discussions')
   createDiscussion(
     @CurrentUser() user: Express.User,

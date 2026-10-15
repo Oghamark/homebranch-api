@@ -22,6 +22,13 @@ type ThreadInput = { title: string; body: string; spoiler?: boolean; promptKind?
 type ReplyInput = { body: string; spoiler?: boolean };
 type UpdateInput = { title?: string; body?: string; spoiler?: boolean };
 type ModerationTarget = { hidden: boolean; deleted: boolean; locked?: boolean; pinned?: boolean };
+type RecoveryTarget = {
+  id: string;
+  type: 'thread' | 'reply';
+  hidden: boolean;
+  deleted: boolean;
+  createdAt: Date;
+};
 
 @Injectable()
 export class BookClubDiscussionService {
@@ -157,6 +164,38 @@ export class BookClubDiscussionService {
       return manager
         .getRepository(BookClubModerationAuditEntity)
         .find({ where: { clubId }, order: { createdAt: 'DESC', id: 'DESC' } });
+    });
+  }
+
+  async listRecoveryTargets(clubId: string, userId: string) {
+    return this.dataSource.transaction(async (manager) => {
+      const actor = await this.member(manager, clubId, userId, true);
+      if (!this.isModerator(actor)) throw new ForbiddenException('Club moderator role required');
+      const [threads, replies] = await Promise.all([
+        manager.getRepository(BookClubDiscussionThreadEntity).find({
+          select: { id: true, hidden: true, deleted: true, createdAt: true },
+          where: { clubId },
+          order: { createdAt: 'ASC', id: 'ASC' },
+        }),
+        manager.getRepository(BookClubDiscussionReplyEntity).find({
+          select: { id: true, hidden: true, deleted: true, createdAt: true },
+          where: { clubId },
+          order: { createdAt: 'ASC', id: 'ASC' },
+        }),
+      ]);
+      const targets: RecoveryTarget[] = [
+        ...threads.map((target) => ({ ...target, type: 'thread' as const })),
+        ...replies.map((target) => ({ ...target, type: 'reply' as const })),
+      ];
+      return targets
+        .filter((target) => target.hidden || target.deleted)
+        .sort(
+          (left, right) =>
+            left.createdAt.getTime() - right.createdAt.getTime() ||
+            left.id.localeCompare(right.id) ||
+            left.type.localeCompare(right.type),
+        )
+        .map(({ id, type, hidden, deleted }) => ({ id, type, hidden, deleted }));
     });
   }
 

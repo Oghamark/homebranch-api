@@ -16,6 +16,7 @@ const ids = {
   moderator: '00000000-0000-4000-8000-000000000012',
   member: '00000000-0000-4000-8000-000000000013',
   outsider: '00000000-0000-4000-8000-000000000014',
+  otherModerator: '00000000-0000-4000-8000-000000000015',
 };
 type RecordRow = Record<string, unknown>;
 function repository(items: RecordRow[]) {
@@ -46,6 +47,7 @@ function fixture() {
     { clubId: ids.club, userId: ids.moderator, role: BookClubRole.MODERATOR },
     { clubId: ids.club, userId: ids.member, role: BookClubRole.MEMBER },
     { clubId: ids.otherClub, userId: ids.moderator, role: BookClubRole.MODERATOR },
+    { clubId: ids.otherClub, userId: ids.otherModerator, role: BookClubRole.MODERATOR },
   ];
   const threads: RecordRow[] = [];
   const replies: RecordRow[] = [];
@@ -82,7 +84,9 @@ function concurrentReadFixture(changeMembership: () => RecordRow | null) {
   const events: string[] = [];
   let clubLocked = false;
   let membership: RecordRow | null = { clubId: ids.club, userId: ids.owner, role: BookClubRole.OWNER };
-  const protectedRows = [{ id: 'protected', clubId: ids.club, body: 'secret' }];
+  const protectedRows = [
+    { id: 'protected', clubId: ids.club, body: 'secret', hidden: true, deleted: false, createdAt: new Date(0) },
+  ];
   const waitForProtectedRows = async () => {
     if (!clubLocked) await membershipChanged.promise;
     events.push('payload-returned');
@@ -153,11 +157,75 @@ describe('BookClubDiscussionService', () => {
     const { service } = fixture();
     await expect(service.listThreads(ids.club, ids.outsider)).rejects.toBeInstanceOf(NotFoundException);
   });
+  it('lists only recovery-safe hidden and deleted targets for moderators in deterministic order', async () => {
+    const { service, threads, replies } = fixture();
+    threads.push(
+      {
+        id: 'thread-deleted',
+        clubId: ids.club,
+        authorUserId: ids.member,
+        title: 'private title',
+        body: 'private thread body',
+        spoiler: true,
+        hidden: false,
+        deleted: true,
+        createdAt: new Date('2025-01-02T00:00:00.000Z'),
+      },
+      {
+        id: 'thread-visible',
+        clubId: ids.club,
+        authorUserId: ids.member,
+        title: 'visible title',
+        body: 'visible body',
+        spoiler: false,
+        hidden: false,
+        deleted: false,
+        createdAt: new Date('2025-01-01T00:00:00.000Z'),
+      },
+    );
+    replies.push({
+      id: 'reply-hidden',
+      clubId: ids.club,
+      threadId: 'thread-visible',
+      authorUserId: ids.member,
+      body: 'private reply body',
+      spoiler: true,
+      hidden: true,
+      deleted: false,
+      createdAt: new Date('2025-01-01T00:00:00.000Z'),
+    });
+
+    await expect(service.listRecoveryTargets(ids.club, ids.moderator)).resolves.toEqual([
+      { id: 'reply-hidden', type: 'reply', hidden: true, deleted: false },
+      { id: 'thread-deleted', type: 'thread', hidden: false, deleted: true },
+    ]);
+  });
+  it('rejects recovery target reads by members and does not disclose private clubs to non-members', async () => {
+    const { service } = fixture();
+    await expect(service.listRecoveryTargets(ids.club, ids.member)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.listRecoveryTargets(ids.club, ids.outsider)).rejects.toBeInstanceOf(NotFoundException);
+  });
+  it('rejects a moderator reading recovery targets from another private club', async () => {
+    const { service, threads } = fixture();
+    threads.push({
+      id: 'thread-1',
+      clubId: ids.club,
+      authorUserId: ids.member,
+      title: 'private title',
+      body: 'private thread body',
+      spoiler: true,
+      hidden: true,
+      deleted: false,
+      createdAt: new Date('2025-01-01T00:00:00.000Z'),
+    });
+    await expect(service.listRecoveryTargets(ids.club, ids.otherModerator)).rejects.toBeInstanceOf(NotFoundException);
+  });
   it.each([
     ['threads', (service: BookClubDiscussionService) => service.listThreads(ids.club, ids.owner)],
     ['replies', (service: BookClubDiscussionService) => service.listReplies(ids.club, 'thread-1', ids.owner)],
     ['moderation audit', (service: BookClubDiscussionService) => service.getAudit(ids.club, ids.owner)],
-  ])('serializes a %s read before concurrent membership revocation can commit', async (_name, read) => {
+    ['recovery targets', (service: BookClubDiscussionService) => service.listRecoveryTargets(ids.club, ids.owner)],
+  ])('serializes a %s read before concurrent membership revocation can commit', async (name, read) => {
     const revoked = jest.fn(() => null);
     const { service, events, changeMembership } = concurrentReadFixture(revoked);
     const readPromise = read(service);
@@ -166,7 +234,10 @@ describe('BookClubDiscussionService', () => {
     await Promise.all([readPromise, revocationPromise]);
 
     expect(revoked).toHaveBeenCalledTimes(1);
-    expect(events).toEqual(['payload-returned', 'membership-changed']);
+    expect(events).toEqual([
+      ...Array.from({ length: name === 'recovery targets' ? 2 : 1 }, () => 'payload-returned'),
+      'membership-changed',
+    ]);
   });
   it('serializes the audit read before concurrent ownership transfer can commit', async () => {
     const transferred = jest.fn(() => ({

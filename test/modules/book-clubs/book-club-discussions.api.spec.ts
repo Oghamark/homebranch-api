@@ -27,6 +27,7 @@ describe('discussion API', () => {
     moderateThread: jest.fn(),
     moderateReply: jest.fn(),
     getAudit: jest.fn(),
+    listRecoveryTargets: jest.fn(),
   };
   beforeAll(async () => {
     const m = await Test.createTestingModule({
@@ -63,5 +64,15 @@ describe('discussion API', () => {
     });
     expect(response.status).toBe(400);
     expect(discussion.moderateThread).not.toHaveBeenCalled();
+  });
+  it('routes moderator recovery target reads without accepting content query parameters', async () => {
+    discussion.listRecoveryTargets.mockResolvedValue([]);
+    const id = '123e4567-e89b-42d3-a456-426614174001';
+    const response = await fetch(`${url}/book-clubs/${id}/discussion-recovery-targets?revealSpoilers=true`, {
+      headers: { 'x-test-user': 'moderator' },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([]);
+    expect(discussion.listRecoveryTargets).toHaveBeenCalledWith(id, 'moderator');
   });
 });
