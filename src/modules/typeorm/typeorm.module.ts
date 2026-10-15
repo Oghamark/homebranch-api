@@ -46,6 +46,7 @@ import { BookClubMilestoneMappingEntity } from 'src/modules/book-clubs/entities/
 import { BookClubMilestoneProgressEntity } from 'src/modules/book-clubs/entities/book-club-milestone-progress.entity';
 import { AddBookClubPrivacyProgress1790000000007 } from 'src/migrations/1790000000007-AddBookClubPrivacyProgress';
 import { AddBookClubDiscussions1790000000008 } from 'src/migrations/1790000000008-AddBookClubDiscussions';
+import { EnforceBookClubDiscussionReplyClub1790000000009 } from 'src/migrations/1790000000009-EnforceBookClubDiscussionReplyClub';
 import { BookClubDiscussionThreadEntity } from 'src/modules/book-clubs/entities/book-club-discussion-thread.entity';
 import { BookClubDiscussionReplyEntity } from 'src/modules/book-clubs/entities/book-club-discussion-reply.entity';
 import { BookClubModerationAuditEntity } from 'src/modules/book-clubs/entities/book-club-moderation-audit.entity';
@@ -127,6 +128,7 @@ import { BookClubModerationAuditEntity } from 'src/modules/book-clubs/entities/b
             AddBookClubSchedules1790000000006,
             AddBookClubPrivacyProgress1790000000007,
             AddBookClubDiscussions1790000000008,
+            EnforceBookClubDiscussionReplyClub1790000000009,
           ],
           migrationsRun: true,
           migrationsTableName: 'migration_table',

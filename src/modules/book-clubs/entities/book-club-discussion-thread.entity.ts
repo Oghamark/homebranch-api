@@ -1,6 +1,7 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm';
 
 @Entity()
+@Unique(['clubId', 'id'])
 export class BookClubDiscussionThreadEntity {
   @PrimaryGeneratedColumn('uuid') id: string;
   @Column({ name: 'club_id', type: 'uuid' }) clubId: string;

@@ -8,7 +8,16 @@ import { BookClubDiscussionReplyEntity } from 'src/modules/book-clubs/entities/b
 import { BookClubModerationAuditEntity } from 'src/modules/book-clubs/entities/book-club-moderation-audit.entity';
 import { BookClubRole, BookClubStatus, BookClubVisibility } from 'src/modules/book-clubs/book-club.types';
 
-export type ModerationAction = 'lock' | 'unlock' | 'pin' | 'unpin' | 'hide' | 'restore' | 'delete';
+export const ModerationAction = {
+  LOCK: 'lock',
+  UNLOCK: 'unlock',
+  PIN: 'pin',
+  UNPIN: 'unpin',
+  HIDE: 'hide',
+  RESTORE: 'restore',
+  DELETE: 'delete',
+} as const;
+export type ModerationAction = (typeof ModerationAction)[keyof typeof ModerationAction];
 type ThreadInput = { title: string; body: string; spoiler?: boolean; promptKind?: boolean };
 type ReplyInput = { body: string; spoiler?: boolean };
 type UpdateInput = { title?: string; body?: string; spoiler?: boolean };
@@ -75,7 +84,8 @@ export class BookClubDiscussionService {
   async listReplies(clubId: string, threadId: string, userId: string, revealSpoilers = false) {
     return this.dataSource.transaction(async (manager) => {
       await this.member(manager, clubId, userId);
-      await this.thread(manager, clubId, threadId);
+      const thread = await this.thread(manager, clubId, threadId);
+      if (thread.hidden || thread.deleted) throw new NotFoundException('Discussion thread not found');
       const rows = await manager.getRepository(BookClubDiscussionReplyEntity).find({ where: { clubId, threadId } });
       return rows.filter((row) => !row.hidden && !row.deleted).map((row) => this.replyResponse(row, revealSpoilers));
     });
@@ -109,7 +119,8 @@ export class BookClubDiscussionService {
       const reply = await this.reply(manager, clubId, replyId);
       const thread = await this.thread(manager, clubId, reply.threadId);
       this.assertAuthorEditable(reply, userId);
-      if (thread.locked) throw new ForbiddenException('Thread is locked');
+      if (thread.locked || thread.hidden || thread.deleted)
+        throw new ForbiddenException('Thread is not open for edits');
       Object.assign(reply, input);
       return this.replyResponse(await manager.getRepository(BookClubDiscussionReplyEntity).save(reply), false);
     });
@@ -153,6 +164,7 @@ export class BookClubDiscussionService {
     id: string,
   ) {
     return this.dataSource.transaction(async (manager) => {
+      if (!Object.values(ModerationAction).includes(action)) throw new BadRequestException('Invalid moderation action');
       const actor = await this.member(manager, clubId, userId, true);
       if (!this.isModerator(actor)) throw new ForbiddenException('Club moderator role required');
       const target: any =

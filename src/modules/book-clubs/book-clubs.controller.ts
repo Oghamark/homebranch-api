@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   Param,
+  ParseEnumPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -140,7 +141,7 @@ export class BookClubsController {
     @CurrentUser() user: Express.User,
     @Param('clubId', ParseUUIDPipe) clubId: string,
     @Param('threadId', ParseUUIDPipe) threadId: string,
-    @Param('action') action: ModerationAction,
+    @Param('action', new ParseEnumPipe(ModerationAction)) action: ModerationAction,
   ) {
     return this.discussions.moderateThread(clubId, threadId, user.id, action);
   }
@@ -150,7 +151,8 @@ export class BookClubsController {
     @CurrentUser() user: Express.User,
     @Param('clubId', ParseUUIDPipe) clubId: string,
     @Param('replyId', ParseUUIDPipe) replyId: string,
-    @Param('action') action: Exclude<ModerationAction, 'lock' | 'unlock' | 'pin' | 'unpin'>,
+    @Param('action', new ParseEnumPipe(ModerationAction))
+    action: Exclude<ModerationAction, 'lock' | 'unlock' | 'pin' | 'unpin'>,
   ) {
     return this.discussions.moderateReply(clubId, replyId, user.id, action);
   }

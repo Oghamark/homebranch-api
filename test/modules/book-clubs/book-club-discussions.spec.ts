@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-return, @typescript-eslint/require-await */
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { BookClubDiscussionService } from 'src/modules/book-clubs/book-club-discussion.service';
+import { BookClubDiscussionService, ModerationAction } from 'src/modules/book-clubs/book-club-discussion.service';
 import { BookClubRole, BookClubStatus, BookClubVisibility } from 'src/modules/book-clubs/book-club.types';
 import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
@@ -59,6 +59,7 @@ function fixture() {
   ]);
   return {
     threads,
+    replies,
     audits,
     service: new BookClubDiscussionService({
       transaction: async (fn) => fn({ getRepository: (entity) => repositories.get(entity) }),
@@ -129,5 +130,122 @@ describe('BookClubDiscussionService', () => {
     await expect(service.editThread(ids.club, 'thread-1', ids.member, { body: 'changed' })).rejects.toBeInstanceOf(
       ForbiddenException,
     );
+  });
+  it.each(['hidden', 'deleted'] as const)('does not disclose replies below a %s thread', async (state) => {
+    const { service, threads, replies } = fixture();
+    threads.push({
+      id: 'thread-1',
+      clubId: ids.club,
+      authorUserId: ids.member,
+      title: 'Post',
+      body: 'body',
+      spoiler: false,
+      locked: false,
+      pinned: false,
+      hidden: state === 'hidden',
+      deleted: state === 'deleted',
+    });
+    replies.push({
+      id: 'reply-1',
+      clubId: ids.club,
+      threadId: 'thread-1',
+      authorUserId: ids.member,
+      body: 'reply',
+      spoiler: false,
+      hidden: false,
+      deleted: false,
+    });
+    await expect(service.listReplies(ids.club, 'thread-1', ids.member)).rejects.toBeInstanceOf(NotFoundException);
+  });
+  it.each(['hidden', 'deleted'] as const)('does not let an author edit a reply below a %s thread', async (state) => {
+    const { service, threads, replies } = fixture();
+    threads.push({
+      id: 'thread-1',
+      clubId: ids.club,
+      authorUserId: ids.member,
+      title: 'Post',
+      body: 'body',
+      spoiler: false,
+      locked: false,
+      pinned: false,
+      hidden: state === 'hidden',
+      deleted: state === 'deleted',
+    });
+    replies.push({
+      id: 'reply-1',
+      clubId: ids.club,
+      threadId: 'thread-1',
+      authorUserId: ids.member,
+      body: 'reply',
+      spoiler: false,
+      hidden: false,
+      deleted: false,
+    });
+    await expect(service.editReply(ids.club, 'reply-1', ids.member, { body: 'changed' })).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+  it.each(['hidden', 'deleted'] as const)('does not let an author delete a %s thread', async (state) => {
+    const { service, threads } = fixture();
+    threads.push({
+      id: 'thread-1',
+      clubId: ids.club,
+      authorUserId: ids.member,
+      title: 'Post',
+      body: 'body',
+      spoiler: false,
+      locked: false,
+      pinned: false,
+      hidden: state === 'hidden',
+      deleted: state === 'deleted',
+    });
+    await expect(service.deleteOwnThread(ids.club, 'thread-1', ids.member)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+  it('rejects an invalid moderation action without creating an audit record', async () => {
+    const { service, threads, audits } = fixture();
+    threads.push({
+      id: 'thread-1',
+      clubId: ids.club,
+      authorUserId: ids.member,
+      title: 'Post',
+      body: 'body',
+      spoiler: false,
+      locked: false,
+      pinned: false,
+      hidden: false,
+      deleted: false,
+    });
+    await expect(
+      service.moderateThread(ids.club, 'thread-1', ids.moderator, 'invented' as unknown as ModerationAction),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(audits).toHaveLength(0);
+  });
+  it('allows moderators to hide a reply and records the action', async () => {
+    const { service, threads, replies, audits } = fixture();
+    threads.push({
+      id: 'thread-1',
+      clubId: ids.club,
+      authorUserId: ids.member,
+      title: 'Post',
+      body: 'body',
+      spoiler: false,
+      locked: false,
+      pinned: false,
+      hidden: false,
+      deleted: false,
+    });
+    replies.push({
+      id: 'reply-1',
+      clubId: ids.club,
+      threadId: 'thread-1',
+      authorUserId: ids.member,
+      body: 'reply',
+      spoiler: false,
+      hidden: false,
+      deleted: false,
+    });
+    await service.moderateReply(ids.club, 'reply-1', ids.moderator, 'hide');
+    expect(replies[0]).toMatchObject({ hidden: true });
+    expect(audits).toEqual([expect.objectContaining({ action: 'hide', targetType: 'reply', targetId: 'reply-1' })]);
   });
 });

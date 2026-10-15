@@ -54,4 +54,14 @@ describe('discussion API', () => {
     expect(response.status).toBe(200);
     expect(discussion.listThreads).toHaveBeenCalledWith(id, 'reader', true);
   });
+  it('rejects an invalid moderation action before invoking the discussion service', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const threadId = '123e4567-e89b-42d3-a456-426614174002';
+    const response = await fetch(`${url}/book-clubs/${clubId}/discussions/${threadId}/moderation/invented`, {
+      method: 'POST',
+      headers: { 'x-test-user': 'moderator' },
+    });
+    expect(response.status).toBe(400);
+    expect(discussion.moderateThread).not.toHaveBeenCalled();
+  });
 });
