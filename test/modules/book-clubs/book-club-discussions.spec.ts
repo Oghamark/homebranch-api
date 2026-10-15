@@ -67,6 +67,74 @@ function fixture() {
   };
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function concurrentReadFixture(changeMembership: () => RecordRow | null) {
+  const membershipChecked = deferred();
+  const membershipChanged = deferred();
+  const payloadReturned = deferred();
+  const events: string[] = [];
+  let clubLocked = false;
+  let membership: RecordRow | null = { clubId: ids.club, userId: ids.owner, role: BookClubRole.OWNER };
+  const protectedRows = [{ id: 'protected', clubId: ids.club, body: 'secret' }];
+  const waitForProtectedRows = async () => {
+    if (!clubLocked) await membershipChanged.promise;
+    events.push('payload-returned');
+    payloadReturned.resolve();
+    return protectedRows;
+  };
+  const repositories = new Map<any, any>([
+    [
+      BookClubEntity,
+      {
+        findOne: jest.fn(async ({ lock }: { lock?: unknown }) => {
+          clubLocked = !!lock;
+          return { id: ids.club, visibility: BookClubVisibility.PRIVATE, status: BookClubStatus.ACTIVE };
+        }),
+      },
+    ],
+    [
+      BookClubMemberEntity,
+      {
+        findOne: jest.fn(async () => {
+          const observedMembership = membership;
+          membershipChecked.resolve();
+          return observedMembership;
+        }),
+      },
+    ],
+    [
+      BookClubDiscussionThreadEntity,
+      {
+        find: jest.fn(waitForProtectedRows),
+        findOne: jest.fn(async () => ({ id: 'thread-1', clubId: ids.club, hidden: false, deleted: false })),
+      },
+    ],
+    [BookClubDiscussionReplyEntity, { find: jest.fn(waitForProtectedRows) }],
+    [BookClubModerationAuditEntity, { find: jest.fn(waitForProtectedRows) }],
+  ]);
+  const service = new BookClubDiscussionService({
+    transaction: async (fn) => fn({ getRepository: (entity) => repositories.get(entity) }),
+  } as unknown as DataSource);
+  return {
+    service,
+    events,
+    async changeMembership() {
+      await membershipChecked.promise;
+      if (clubLocked) await payloadReturned.promise;
+      membership = changeMembership();
+      events.push('membership-changed');
+      membershipChanged.resolve();
+    },
+  };
+}
+
 describe('BookClubDiscussionService', () => {
   it('conceals spoiler bodies unless a member explicitly reveals them', async () => {
     const { service } = fixture();
@@ -84,6 +152,36 @@ describe('BookClubDiscussionService', () => {
   it('does not disclose private discussions to non-members', async () => {
     const { service } = fixture();
     await expect(service.listThreads(ids.club, ids.outsider)).rejects.toBeInstanceOf(NotFoundException);
+  });
+  it.each([
+    ['threads', (service: BookClubDiscussionService) => service.listThreads(ids.club, ids.owner)],
+    ['replies', (service: BookClubDiscussionService) => service.listReplies(ids.club, 'thread-1', ids.owner)],
+    ['moderation audit', (service: BookClubDiscussionService) => service.getAudit(ids.club, ids.owner)],
+  ])('serializes a %s read before concurrent membership revocation can commit', async (_name, read) => {
+    const revoked = jest.fn(() => null);
+    const { service, events, changeMembership } = concurrentReadFixture(revoked);
+    const readPromise = read(service);
+    const revocationPromise = changeMembership();
+
+    await Promise.all([readPromise, revocationPromise]);
+
+    expect(revoked).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(['payload-returned', 'membership-changed']);
+  });
+  it('serializes the audit read before concurrent ownership transfer can commit', async () => {
+    const transferred = jest.fn(() => ({
+      clubId: ids.club,
+      userId: ids.owner,
+      role: BookClubRole.MEMBER,
+    }));
+    const { service, events, changeMembership } = concurrentReadFixture(transferred);
+    const readPromise = service.getAudit(ids.club, ids.owner);
+    const transferPromise = changeMembership();
+
+    await Promise.all([readPromise, transferPromise]);
+
+    expect(transferred).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(['payload-returned', 'membership-changed']);
   });
   it('restricts moderation to the actor club and audits moderator actions for owner', async () => {
     const { service, threads, audits } = fixture();

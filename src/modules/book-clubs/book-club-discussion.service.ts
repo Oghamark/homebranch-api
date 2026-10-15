@@ -21,6 +21,7 @@ export type ModerationAction = (typeof ModerationAction)[keyof typeof Moderation
 type ThreadInput = { title: string; body: string; spoiler?: boolean; promptKind?: boolean };
 type ReplyInput = { body: string; spoiler?: boolean };
 type UpdateInput = { title?: string; body?: string; spoiler?: boolean };
+type ModerationTarget = { hidden: boolean; deleted: boolean; locked?: boolean; pinned?: boolean };
 
 @Injectable()
 export class BookClubDiscussionService {
@@ -28,12 +29,11 @@ export class BookClubDiscussionService {
 
   async listThreads(clubId: string, userId: string, revealSpoilers = false) {
     return this.dataSource.transaction(async (manager) => {
-      await this.member(manager, clubId, userId);
-      const rows = await manager.getRepository(BookClubDiscussionThreadEntity).find({ where: { clubId } });
-      return rows
-        .filter((row) => !row.hidden && !row.deleted)
-        .sort((a, b) => Number(b.pinned) - Number(a.pinned))
-        .map((row) => this.threadResponse(row, revealSpoilers));
+      await this.member(manager, clubId, userId, true);
+      const rows = await manager
+        .getRepository(BookClubDiscussionThreadEntity)
+        .find({ where: { clubId }, order: { pinned: 'DESC', createdAt: 'DESC', id: 'DESC' } });
+      return rows.filter((row) => !row.hidden && !row.deleted).map((row) => this.threadResponse(row, revealSpoilers));
     });
   }
 
@@ -83,10 +83,12 @@ export class BookClubDiscussionService {
 
   async listReplies(clubId: string, threadId: string, userId: string, revealSpoilers = false) {
     return this.dataSource.transaction(async (manager) => {
-      await this.member(manager, clubId, userId);
+      await this.member(manager, clubId, userId, true);
       const thread = await this.thread(manager, clubId, threadId);
       if (thread.hidden || thread.deleted) throw new NotFoundException('Discussion thread not found');
-      const rows = await manager.getRepository(BookClubDiscussionReplyEntity).find({ where: { clubId, threadId } });
+      const rows = await manager
+        .getRepository(BookClubDiscussionReplyEntity)
+        .find({ where: { clubId, threadId }, order: { createdAt: 'ASC', id: 'ASC' } });
       return rows.filter((row) => !row.hidden && !row.deleted).map((row) => this.replyResponse(row, revealSpoilers));
     });
   }
@@ -150,9 +152,11 @@ export class BookClubDiscussionService {
 
   async getAudit(clubId: string, userId: string) {
     return this.dataSource.transaction(async (manager) => {
-      const actor = await this.member(manager, clubId, userId);
+      const actor = await this.member(manager, clubId, userId, true);
       if (actor.role !== BookClubRole.OWNER) throw new ForbiddenException('Club owner role required');
-      return manager.getRepository(BookClubModerationAuditEntity).find({ where: { clubId } });
+      return manager
+        .getRepository(BookClubModerationAuditEntity)
+        .find({ where: { clubId }, order: { createdAt: 'DESC', id: 'DESC' } });
     });
   }
 
@@ -167,7 +171,7 @@ export class BookClubDiscussionService {
       if (!Object.values(ModerationAction).includes(action)) throw new BadRequestException('Invalid moderation action');
       const actor = await this.member(manager, clubId, userId, true);
       if (!this.isModerator(actor)) throw new ForbiddenException('Club moderator role required');
-      const target: any =
+      const target: ModerationTarget =
         type === 'thread' ? await this.thread(manager, clubId, id) : await this.reply(manager, clubId, id);
       if (type === 'reply' && ['lock', 'unlock', 'pin', 'unpin'].includes(action))
         throw new BadRequestException('Action is not valid for replies');
