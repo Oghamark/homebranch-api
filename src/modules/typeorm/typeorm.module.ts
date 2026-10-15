@@ -45,6 +45,10 @@ import { BookClubMilestoneEntity } from 'src/modules/book-clubs/entities/book-cl
 import { BookClubMilestoneMappingEntity } from 'src/modules/book-clubs/entities/book-club-milestone-mapping.entity';
 import { BookClubMilestoneProgressEntity } from 'src/modules/book-clubs/entities/book-club-milestone-progress.entity';
 import { AddBookClubPrivacyProgress1790000000007 } from 'src/migrations/1790000000007-AddBookClubPrivacyProgress';
+import { AddBookClubDiscussions1790000000008 } from 'src/migrations/1790000000008-AddBookClubDiscussions';
+import { BookClubDiscussionThreadEntity } from 'src/modules/book-clubs/entities/book-club-discussion-thread.entity';
+import { BookClubDiscussionReplyEntity } from 'src/modules/book-clubs/entities/book-club-discussion-reply.entity';
+import { BookClubModerationAuditEntity } from 'src/modules/book-clubs/entities/book-club-moderation-audit.entity';
 
 @Module({
   imports: [
@@ -90,6 +94,9 @@ import { AddBookClubPrivacyProgress1790000000007 } from 'src/migrations/17900000
             BookClubMilestoneEntity,
             BookClubMilestoneMappingEntity,
             BookClubMilestoneProgressEntity,
+            BookClubDiscussionThreadEntity,
+            BookClubDiscussionReplyEntity,
+            BookClubModerationAuditEntity,
           ],
           migrations: [
             SchemaUpdate1755566512418,
@@ -119,6 +126,7 @@ import { AddBookClubPrivacyProgress1790000000007 } from 'src/migrations/17900000
             AddBookClubWorkMatching1790000000005,
             AddBookClubSchedules1790000000006,
             AddBookClubPrivacyProgress1790000000007,
+            AddBookClubDiscussions1790000000008,
           ],
           migrationsRun: true,
           migrationsTableName: 'migration_table',

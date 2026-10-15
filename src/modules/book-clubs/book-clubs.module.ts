@@ -9,7 +9,11 @@ import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-
 import { BookClubMilestoneEntity } from 'src/modules/book-clubs/entities/book-club-milestone.entity';
 import { BookClubMilestoneMappingEntity } from 'src/modules/book-clubs/entities/book-club-milestone-mapping.entity';
 import { BookClubMilestoneProgressEntity } from 'src/modules/book-clubs/entities/book-club-milestone-progress.entity';
+import { BookClubDiscussionThreadEntity } from 'src/modules/book-clubs/entities/book-club-discussion-thread.entity';
+import { BookClubDiscussionReplyEntity } from 'src/modules/book-clubs/entities/book-club-discussion-reply.entity';
+import { BookClubModerationAuditEntity } from 'src/modules/book-clubs/entities/book-club-moderation-audit.entity';
 import { BookClubsController } from 'src/modules/book-clubs/book-clubs.controller';
+import { BookClubDiscussionService } from 'src/modules/book-clubs/book-club-discussion.service';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
 
 @Module({
@@ -22,11 +26,14 @@ import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
       BookClubMilestoneEntity,
       BookClubMilestoneMappingEntity,
       BookClubMilestoneProgressEntity,
+      BookClubDiscussionThreadEntity,
+      BookClubDiscussionReplyEntity,
+      BookClubModerationAuditEntity,
     ]),
     AuthModule,
     BookCoreModule,
   ],
-  providers: [BookClubsService],
+  providers: [BookClubsService, BookClubDiscussionService],
   controllers: [BookClubsController],
   exports: [BookClubsService],
 })

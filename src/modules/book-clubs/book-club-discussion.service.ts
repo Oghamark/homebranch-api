@@ -1,0 +1,220 @@
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource, EntityManager } from 'typeorm';
+import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
+import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
+import { BookClubDiscussionThreadEntity } from 'src/modules/book-clubs/entities/book-club-discussion-thread.entity';
+import { BookClubDiscussionReplyEntity } from 'src/modules/book-clubs/entities/book-club-discussion-reply.entity';
+import { BookClubModerationAuditEntity } from 'src/modules/book-clubs/entities/book-club-moderation-audit.entity';
+import { BookClubRole, BookClubStatus, BookClubVisibility } from 'src/modules/book-clubs/book-club.types';
+
+export type ModerationAction = 'lock' | 'unlock' | 'pin' | 'unpin' | 'hide' | 'restore' | 'delete';
+type ThreadInput = { title: string; body: string; spoiler?: boolean; promptKind?: boolean };
+type ReplyInput = { body: string; spoiler?: boolean };
+type UpdateInput = { title?: string; body?: string; spoiler?: boolean };
+
+@Injectable()
+export class BookClubDiscussionService {
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+
+  async listThreads(clubId: string, userId: string, revealSpoilers = false) {
+    return this.dataSource.transaction(async (manager) => {
+      await this.member(manager, clubId, userId);
+      const rows = await manager.getRepository(BookClubDiscussionThreadEntity).find({ where: { clubId } });
+      return rows
+        .filter((row) => !row.hidden && !row.deleted)
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+        .map((row) => this.threadResponse(row, revealSpoilers));
+    });
+  }
+
+  async createThread(clubId: string, userId: string, input: ThreadInput) {
+    return this.dataSource.transaction(async (manager) => {
+      const actor = await this.member(manager, clubId, userId, true);
+      if (input.promptKind && !this.isModerator(actor))
+        throw new ForbiddenException('Club moderator role required for prompts');
+      const repo = manager.getRepository(BookClubDiscussionThreadEntity);
+      const thread = await repo.save(
+        repo.create({
+          clubId,
+          authorUserId: userId,
+          title: input.title,
+          body: input.body,
+          spoiler: !!input.spoiler,
+          promptKind: !!input.promptKind,
+          locked: false,
+          pinned: false,
+          hidden: false,
+          deleted: false,
+        }),
+      );
+      return this.threadResponse(thread, false);
+    });
+  }
+
+  async editThread(clubId: string, threadId: string, userId: string, input: UpdateInput) {
+    return this.dataSource.transaction(async (manager) => {
+      await this.member(manager, clubId, userId, true);
+      const thread = await this.thread(manager, clubId, threadId);
+      this.assertAuthorEditable(thread, userId);
+      Object.assign(thread, input);
+      return this.threadResponse(await manager.getRepository(BookClubDiscussionThreadEntity).save(thread), false);
+    });
+  }
+
+  async deleteOwnThread(clubId: string, threadId: string, userId: string) {
+    return this.dataSource.transaction(async (manager) => {
+      await this.member(manager, clubId, userId, true);
+      const thread = await this.thread(manager, clubId, threadId);
+      this.assertAuthorEditable(thread, userId);
+      thread.deleted = true;
+      await manager.getRepository(BookClubDiscussionThreadEntity).save(thread);
+    });
+  }
+
+  async listReplies(clubId: string, threadId: string, userId: string, revealSpoilers = false) {
+    return this.dataSource.transaction(async (manager) => {
+      await this.member(manager, clubId, userId);
+      await this.thread(manager, clubId, threadId);
+      const rows = await manager.getRepository(BookClubDiscussionReplyEntity).find({ where: { clubId, threadId } });
+      return rows.filter((row) => !row.hidden && !row.deleted).map((row) => this.replyResponse(row, revealSpoilers));
+    });
+  }
+
+  async createReply(clubId: string, threadId: string, userId: string, input: ReplyInput) {
+    return this.dataSource.transaction(async (manager) => {
+      await this.member(manager, clubId, userId, true);
+      const thread = await this.thread(manager, clubId, threadId);
+      if (thread.locked || thread.hidden || thread.deleted)
+        throw new ForbiddenException('Thread is not open for replies');
+      const repo = manager.getRepository(BookClubDiscussionReplyEntity);
+      const reply = await repo.save(
+        repo.create({
+          clubId,
+          threadId,
+          authorUserId: userId,
+          body: input.body,
+          spoiler: !!input.spoiler,
+          hidden: false,
+          deleted: false,
+        }),
+      );
+      return this.replyResponse(reply, false);
+    });
+  }
+
+  async editReply(clubId: string, replyId: string, userId: string, input: ReplyInput) {
+    return this.dataSource.transaction(async (manager) => {
+      await this.member(manager, clubId, userId, true);
+      const reply = await this.reply(manager, clubId, replyId);
+      const thread = await this.thread(manager, clubId, reply.threadId);
+      this.assertAuthorEditable(reply, userId);
+      if (thread.locked) throw new ForbiddenException('Thread is locked');
+      Object.assign(reply, input);
+      return this.replyResponse(await manager.getRepository(BookClubDiscussionReplyEntity).save(reply), false);
+    });
+  }
+
+  async deleteOwnReply(clubId: string, replyId: string, userId: string) {
+    return this.dataSource.transaction(async (manager) => {
+      await this.member(manager, clubId, userId, true);
+      const reply = await this.reply(manager, clubId, replyId);
+      this.assertAuthorEditable(reply, userId);
+      reply.deleted = true;
+      await manager.getRepository(BookClubDiscussionReplyEntity).save(reply);
+    });
+  }
+
+  async moderateThread(clubId: string, threadId: string, userId: string, action: ModerationAction) {
+    return this.moderate(clubId, userId, action, 'thread', threadId);
+  }
+  async moderateReply(
+    clubId: string,
+    replyId: string,
+    userId: string,
+    action: Exclude<ModerationAction, 'lock' | 'unlock' | 'pin' | 'unpin'>,
+  ) {
+    return this.moderate(clubId, userId, action, 'reply', replyId);
+  }
+
+  async getAudit(clubId: string, userId: string) {
+    return this.dataSource.transaction(async (manager) => {
+      const actor = await this.member(manager, clubId, userId);
+      if (actor.role !== BookClubRole.OWNER) throw new ForbiddenException('Club owner role required');
+      return manager.getRepository(BookClubModerationAuditEntity).find({ where: { clubId } });
+    });
+  }
+
+  private async moderate(
+    clubId: string,
+    userId: string,
+    action: ModerationAction,
+    type: 'thread' | 'reply',
+    id: string,
+  ) {
+    return this.dataSource.transaction(async (manager) => {
+      const actor = await this.member(manager, clubId, userId, true);
+      if (!this.isModerator(actor)) throw new ForbiddenException('Club moderator role required');
+      const target: any =
+        type === 'thread' ? await this.thread(manager, clubId, id) : await this.reply(manager, clubId, id);
+      if (type === 'reply' && ['lock', 'unlock', 'pin', 'unpin'].includes(action))
+        throw new BadRequestException('Action is not valid for replies');
+      if (action === 'lock') target.locked = true;
+      if (action === 'unlock') target.locked = false;
+      if (action === 'pin') target.pinned = true;
+      if (action === 'unpin') target.pinned = false;
+      if (action === 'hide') target.hidden = true;
+      if (action === 'restore') {
+        target.hidden = false;
+        target.deleted = false;
+      }
+      if (action === 'delete') target.deleted = true;
+      await manager
+        .getRepository(type === 'thread' ? BookClubDiscussionThreadEntity : BookClubDiscussionReplyEntity)
+        .save(target);
+      const auditRepo = manager.getRepository(BookClubModerationAuditEntity);
+      await auditRepo.save(auditRepo.create({ clubId, actorUserId: userId, action, targetType: type, targetId: id }));
+    });
+  }
+
+  private async member(manager: EntityManager, clubId: string, userId: string, lock = false) {
+    const club = await manager
+      .getRepository(BookClubEntity)
+      .findOne({ where: { id: clubId }, ...(lock ? { lock: { mode: 'pessimistic_write' as const } } : {}) });
+    if (!club || club.status !== BookClubStatus.ACTIVE) throw new NotFoundException('Book club not found');
+    const member = await manager.getRepository(BookClubMemberEntity).findOne({ where: { clubId, userId } });
+    if (!member) {
+      if (club.visibility === BookClubVisibility.PRIVATE) throw new NotFoundException('Book club not found');
+      throw new ForbiddenException('Book club membership required');
+    }
+    return member;
+  }
+  private async thread(manager: EntityManager, clubId: string, id: string) {
+    const row = await manager.getRepository(BookClubDiscussionThreadEntity).findOne({ where: { id, clubId } });
+    if (!row) throw new NotFoundException('Discussion thread not found');
+    return row;
+  }
+  private async reply(manager: EntityManager, clubId: string, id: string) {
+    const row = await manager.getRepository(BookClubDiscussionReplyEntity).findOne({ where: { id, clubId } });
+    if (!row) throw new NotFoundException('Discussion reply not found');
+    return row;
+  }
+  private isModerator(member: BookClubMemberEntity) {
+    return member.role === BookClubRole.OWNER || member.role === BookClubRole.MODERATOR;
+  }
+  private assertAuthorEditable(
+    row: { authorUserId: string; hidden: boolean; deleted: boolean; locked?: boolean },
+    userId: string,
+  ) {
+    if (row.authorUserId !== userId || row.hidden || row.deleted || row.locked)
+      throw new ForbiddenException('Only visible unlocked author content can be changed');
+  }
+  private threadResponse(row: BookClubDiscussionThreadEntity, reveal: boolean) {
+    const { body, ...safe } = row;
+    return row.spoiler && !reveal ? safe : { ...safe, body };
+  }
+  private replyResponse(row: BookClubDiscussionReplyEntity, reveal: boolean) {
+    const { body, ...safe } = row;
+    return row.spoiler && !reveal ? safe : { ...safe, body };
+  }
+}

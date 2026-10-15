@@ -39,6 +39,14 @@ All routes require the existing JWT authentication guard. The authenticated acco
 | `POST`   | `/book-clubs/:clubId/transfer-ownership`                         | Owner transfers ownership to an existing member using `{ "newOwnerUserId": "..." }`; prior owner becomes a member.                                            |
 | `POST`   | `/book-clubs/:clubId/archive`                                    | Owner archives the club. Archived clubs are omitted from lists and cannot be joined or modified.                                                              |
 | `DELETE` | `/book-clubs/:clubId`                                            | Owner permanently deletes the club; member and selected-work rows are removed by the club foreign-key cascades.                                               |
+| `GET` | `/book-clubs/:clubId/discussions?revealSpoilers=true` | Member-only discussion list. Spoiler bodies are omitted unless the query is exactly `true`. |
+| `POST` | `/book-clubs/:clubId/discussions` | Member creates `{ title, body, spoiler? }`; only owner/moderator may set `promptKind: true`. |
+| `PATCH`/`DELETE` | `/book-clubs/:clubId/discussions/:threadId` | Author may edit/delete only own visible, unlocked thread. |
+| `GET`/`POST` | `/book-clubs/:clubId/discussions/:threadId/replies` | Member lists or creates replies; locked/hidden/deleted threads reject new replies. |
+| `PATCH`/`DELETE` | `/book-clubs/:clubId/discussion-replies/:replyId` | Author may edit/delete only own visible reply (editing also requires an unlocked thread). |
+| `POST` | `/book-clubs/:clubId/discussions/:threadId/moderation/:action` | Owner/moderator action: `lock`, `unlock`, `pin`, `unpin`, `hide`, `restore`, or `delete`. |
+| `POST` | `/book-clubs/:clubId/discussion-replies/:replyId/moderation/:action` | Owner/moderator action: `hide`, `restore`, or `delete`. |
+| `GET` | `/book-clubs/:clubId/discussion-audit` | Owner-only moderation audit with actor, action, target and timestamp. |
 
 Club, member, work, and milestone route parameters (`clubId`, `userId`, `workId`, `milestoneId`), and add-member/ownership-transfer/reading-copy/match-confirmation body IDs must be syntactically valid UUIDs; malformed values return `400`.
 

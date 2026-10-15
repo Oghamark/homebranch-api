@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { BookClubsController } from 'src/modules/book-clubs/book-clubs.controller';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
+import { BookClubDiscussionService } from 'src/modules/book-clubs/book-club-discussion.service';
 
 class HeaderUserGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
@@ -47,7 +48,10 @@ describe('BookClubsController API', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [BookClubsController],
-      providers: [{ provide: BookClubsService, useValue: service }],
+      providers: [
+        { provide: BookClubsService, useValue: service },
+        { provide: BookClubDiscussionService, useValue: {} },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useClass(HeaderUserGuard)
