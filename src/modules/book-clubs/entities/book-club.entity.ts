@@ -21,6 +21,12 @@ export class BookClubEntity {
   @Column({ name: 'owner_user_id', type: 'varchar' })
   ownerUserId: string;
 
+  @Column({ name: 'start_date', type: 'date', nullable: true })
+  startDate?: string | null;
+
+  @Column({ name: 'completion_date', type: 'date', nullable: true })
+  completionDate?: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamp' })
   createdAt: Date;
 

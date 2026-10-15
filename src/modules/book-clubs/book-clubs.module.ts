@@ -6,12 +6,23 @@ import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
+import { BookClubMilestoneEntity } from 'src/modules/book-clubs/entities/book-club-milestone.entity';
+import { BookClubMilestoneMappingEntity } from 'src/modules/book-clubs/entities/book-club-milestone-mapping.entity';
+import { BookClubMilestoneProgressEntity } from 'src/modules/book-clubs/entities/book-club-milestone-progress.entity';
 import { BookClubsController } from 'src/modules/book-clubs/book-clubs.controller';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([BookClubEntity, BookClubMemberEntity, BookClubWorkEntity, BookClubReadingCopyEntity]),
+    TypeOrmModule.forFeature([
+      BookClubEntity,
+      BookClubMemberEntity,
+      BookClubWorkEntity,
+      BookClubReadingCopyEntity,
+      BookClubMilestoneEntity,
+      BookClubMilestoneMappingEntity,
+      BookClubMilestoneProgressEntity,
+    ]),
     AuthModule,
     BookCoreModule,
   ],

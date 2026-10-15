@@ -3,6 +3,7 @@ import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
+import { BookClubMilestoneEntity } from 'src/modules/book-clubs/entities/book-club-milestone.entity';
 import { BookClubRole, BookClubStatus, BookClubVisibility } from 'src/modules/book-clubs/book-club.types';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
 
@@ -31,11 +32,13 @@ describe('BookClubsService', () => {
     upsert: jest.fn<Promise<unknown>, [unknown, unknown]>(),
     update: jest.fn<Promise<unknown>, [unknown, unknown]>(),
   };
+  const milestoneRepository = { delete: jest.fn<Promise<unknown>, [unknown]>() };
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
     [BookClubMemberEntity, memberRepository],
     [BookClubWorkEntity, workRepository],
     [BookClubReadingCopyEntity, readingCopyRepository],
+    [BookClubMilestoneEntity, milestoneRepository],
   ]);
   const manager = {
     getRepository: (entity: unknown) => repositories.get(entity),
@@ -53,6 +56,7 @@ describe('BookClubsService', () => {
     workRepository.findOne.mockReset().mockResolvedValue(undefined);
     readingCopyRepository.upsert.mockReset().mockResolvedValue({});
     readingCopyRepository.update.mockReset().mockResolvedValue({});
+    milestoneRepository.delete.mockReset().mockResolvedValue({ affected: 0 });
     clubRepository.find.mockReset().mockResolvedValue([]);
     clubRepository.delete.mockReset().mockResolvedValue({ affected: 1 });
     memberRepository.find.mockReset().mockResolvedValue([]);

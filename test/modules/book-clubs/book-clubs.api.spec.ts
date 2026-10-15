@@ -23,6 +23,7 @@ describe('BookClubsController API', () => {
     joinClub: jest.fn(),
     createClub: jest.fn(),
     getClub: jest.fn(),
+    getSchedule: jest.fn(),
     updateClub: jest.fn(),
     addMember: jest.fn(),
     removeMember: jest.fn(),
@@ -35,6 +36,10 @@ describe('BookClubsController API', () => {
     confirmWorkMatch: jest.fn(),
     setReadingCopy: jest.fn(),
     clearReadingCopy: jest.fn(),
+    updateSchedule: jest.fn(),
+    setMilestoneProgress: jest.fn(),
+    setMilestoneMapping: jest.fn(),
+    setProgressSharing: jest.fn(),
   };
   let app: INestApplication;
   let baseUrl: string;
@@ -186,6 +191,134 @@ describe('BookClubsController API', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ clubId, workId, source: 'none', available: false, book: null });
     expect(service.getReadingCopy).toHaveBeenCalledWith(clubId, workId, 'reader-1');
+  });
+
+  it('routes schedule updates to the authenticated owner or moderator without accepting actor IDs', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const schedule = {
+      startDate: '2026-11-01',
+      completionDate: '2026-12-01',
+      milestones: [{ name: 'Part One', kind: 'part', position: 1 }],
+    };
+    service.updateSchedule.mockResolvedValue(schedule);
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/schedule`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'club-moderator' },
+      body: JSON.stringify(schedule),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(schedule);
+    expect(service.updateSchedule).toHaveBeenCalledWith(clubId, 'club-moderator', schedule);
+  });
+
+  it('rejects null milestones while allowing an empty milestone list', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    service.updateSchedule.mockResolvedValue({ clubId, startDate: null, completionDate: null, milestones: [] });
+
+    const nullResponse = await fetch(`${baseUrl}/book-clubs/${clubId}/schedule`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'club-moderator' },
+      body: JSON.stringify({ milestones: null }),
+    });
+    const emptyResponse = await fetch(`${baseUrl}/book-clubs/${clubId}/schedule`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'club-moderator' },
+      body: JSON.stringify({ milestones: [] }),
+    });
+
+    expect(nullResponse.status).toBe(400);
+    expect(emptyResponse.status).toBe(200);
+    expect(service.updateSchedule).toHaveBeenCalledTimes(1);
+    expect(service.updateSchedule).toHaveBeenCalledWith(clubId, 'club-moderator', { milestones: [] });
+  });
+
+  it('routes member progress as a coarse summary and does not accept reading locations', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const milestoneId = '123e4567-e89b-42d3-a456-426614174002';
+    const progress = { status: 'in_progress', percentage: 42 };
+    service.setMilestoneProgress.mockResolvedValue({ milestoneId, ...progress });
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/milestones/${milestoneId}/progress`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'reader-1' },
+      body: JSON.stringify(progress),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ milestoneId, ...progress });
+    expect(service.setMilestoneProgress).toHaveBeenCalledWith(clubId, milestoneId, 'reader-1', progress);
+
+    const locationAttempt = await fetch(`${baseUrl}/book-clubs/${clubId}/milestones/${milestoneId}/progress`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'reader-1' },
+      body: JSON.stringify({ ...progress, cfi: 'epubcfi(/6/4)' }),
+    });
+    expect(locationAttempt.status).toBe(400);
+    expect(service.setMilestoneProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes schedule reads through the authenticated member context', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const schedule = {
+      clubId,
+      startDate: '2026-11-01',
+      completionDate: '2026-12-01',
+      milestones: [{ id: 'milestone-1', name: 'Part One', kind: 'part', position: 1 }],
+      progressSharingEnabled: false,
+      myMappings: [],
+      myProgress: [],
+      sharedProgress: [],
+    };
+    service.getSchedule.mockResolvedValue(schedule);
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/schedule`, {
+      headers: { 'x-test-user': 'reader-1' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(schedule);
+    expect(service.getSchedule).toHaveBeenCalledWith(clubId, 'reader-1');
+  });
+
+  it('lets a member explicitly opt into coarse progress sharing', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    service.setProgressSharing.mockResolvedValue({ enabled: true });
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/progress-sharing`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'reader-1' },
+      body: JSON.stringify({ enabled: true }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ enabled: true });
+    expect(service.setProgressSharing).toHaveBeenCalledWith(clubId, 'reader-1', true);
+  });
+
+  it('stores member-specific milestone mappings without accepting reader locations', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const milestoneId = '123e4567-e89b-42d3-a456-426614174002';
+    const mapping = { memberLabel: 'My Chapter 7', memberPosition: 7 };
+    service.setMilestoneMapping.mockResolvedValue({ milestoneId, ...mapping });
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/milestones/${milestoneId}/mapping`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'reader-1' },
+      body: JSON.stringify(mapping),
+    });
+    const locationAttempt = await fetch(`${baseUrl}/book-clubs/${clubId}/milestones/${milestoneId}/mapping`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'reader-1' },
+      body: JSON.stringify({ ...mapping, pageNumber: 42 }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ milestoneId, ...mapping });
+    expect(locationAttempt.status).toBe(400);
+    expect(service.setMilestoneMapping).toHaveBeenCalledTimes(1);
+    expect(service.setMilestoneMapping).toHaveBeenCalledWith(clubId, milestoneId, 'reader-1', mapping);
   });
 
   it('routes candidate discovery to the authenticated member without accepting a caller-supplied actor ID', async () => {
