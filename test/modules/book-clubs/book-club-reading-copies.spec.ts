@@ -7,6 +7,9 @@ import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
+import { BookClubMilestoneMappingEntity } from 'src/modules/book-clubs/entities/book-club-milestone-mapping.entity';
+import { BookClubMilestoneProgressEntity } from 'src/modules/book-clubs/entities/book-club-milestone-progress.entity';
+import { BookClubMilestoneEntity } from 'src/modules/book-clubs/entities/book-club-milestone.entity';
 import {
   BookClubAssociationMethod,
   BookClubReadingCopySource,
@@ -38,11 +41,17 @@ describe('Book club reading-copy associations', () => {
   };
   const bookRepository = { findOne: jest.fn(), find: jest.fn() };
   const bookFormatRepository = { find: jest.fn<Promise<unknown[]>, [unknown]>() };
+  const milestoneMappingRepository = { delete: jest.fn() };
+  const milestoneProgressRepository = { delete: jest.fn() };
+  const milestoneRepository = { delete: jest.fn() };
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
     [BookClubMemberEntity, memberRepository],
     [BookClubWorkEntity, workRepository],
     [BookClubReadingCopyEntity, readingCopyRepository],
+    [BookClubMilestoneMappingEntity, milestoneMappingRepository],
+    [BookClubMilestoneProgressEntity, milestoneProgressRepository],
+    [BookClubMilestoneEntity, milestoneRepository],
     [BookEntity, bookRepository],
     [BookFormatEntity, bookFormatRepository],
   ]);
@@ -65,6 +74,9 @@ describe('Book club reading-copy associations', () => {
     jest.clearAllMocks();
     readingCopyRepository.upsert.mockReset().mockResolvedValue(undefined);
     readingCopyRepository.update.mockReset().mockResolvedValue(undefined);
+    milestoneMappingRepository.delete.mockReset().mockResolvedValue(undefined);
+    milestoneProgressRepository.delete.mockReset().mockResolvedValue(undefined);
+    milestoneRepository.delete.mockReset().mockResolvedValue(undefined);
     delete process.env.CLOUD_MODE;
     clubRepository.findOne.mockResolvedValue(club);
     clubRepository.save.mockImplementation((value: unknown) => Promise.resolve(value));
@@ -518,6 +530,21 @@ describe('Book club reading-copy associations', () => {
     expect(readingCopyRepository.upsert).not.toHaveBeenCalled();
   });
 
+  it('clears edition-specific milestone data when a member selects a different reading copy', async () => {
+    readingCopyRepository.findOne.mockResolvedValue({
+      id: 'existing-association',
+      memberId: membership.id,
+      workId,
+      bookId: 'old-book-id',
+      source: BookClubReadingCopySource.PERSONAL,
+    });
+
+    await service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.PERSONAL, bookId });
+
+    expect(milestoneProgressRepository.delete).toHaveBeenCalledWith({ memberId: membership.id, workId });
+    expect(milestoneMappingRepository.delete).toHaveBeenCalledWith({ memberId: membership.id, workId });
+  });
+
   it('lets a self-hosted member switch a work association from shared to personal', async () => {
     await service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.SHARED, bookId });
     await service.setReadingCopy(clubId, workId, userId, { source: BookClubReadingCopySource.PERSONAL, bookId });
@@ -898,19 +925,7 @@ describe('Book club reading-copy associations', () => {
       source: string;
     };
     let storedAssociation: StoredAssociation | undefined;
-    let readCount = 0;
-    let releaseReads: () => void = () => undefined;
-    const bothReadsCompleted = new Promise<void>((resolve) => {
-      releaseReads = resolve;
-    });
-
-    readingCopyRepository.findOne.mockImplementation(async () => {
-      const observedAssociation = storedAssociation;
-      readCount += 1;
-      if (readCount === 2) releaseReads();
-      await bothReadsCompleted;
-      return observedAssociation;
-    });
+    readingCopyRepository.findOne.mockResolvedValue(undefined);
     readingCopyRepository.save.mockImplementation((value: unknown) => {
       const association = value as StoredAssociation;
       if (storedAssociation) throw new Error('duplicate key violates unique constraint');

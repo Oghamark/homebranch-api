@@ -20,6 +20,9 @@ export class BookClubMemberEntity {
   @Column({ type: 'varchar', default: BookClubRole.MEMBER })
   role: BookClubRole;
 
+  @Column({ name: 'progress_sharing_enabled', type: 'boolean', default: false })
+  progressSharingEnabled: boolean;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamp' })
   createdAt: Date;
 }

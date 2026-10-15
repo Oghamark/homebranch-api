@@ -22,6 +22,10 @@ import { UpdateBookClubMemberDto } from 'src/modules/book-clubs/dto/update-book-
 import { UpdateBookClubDto } from 'src/modules/book-clubs/dto/update-book-club.dto';
 import { SetBookClubReadingCopyDto } from 'src/modules/book-clubs/dto/set-book-club-reading-copy.dto';
 import { ConfirmBookClubWorkMatchDto } from 'src/modules/book-clubs/dto/confirm-book-club-work-match.dto';
+import { UpdateBookClubScheduleDto } from 'src/modules/book-clubs/dto/update-book-club-schedule.dto';
+import { SetBookClubMilestoneProgressDto } from 'src/modules/book-clubs/dto/set-book-club-milestone-progress.dto';
+import { SetBookClubMilestoneMappingDto } from 'src/modules/book-clubs/dto/set-book-club-milestone-mapping.dto';
+import { SetBookClubProgressSharingDto } from 'src/modules/book-clubs/dto/set-book-club-progress-sharing.dto';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
 
@@ -50,6 +54,59 @@ export class BookClubsController {
   @Get(':clubId')
   getClub(@CurrentUser() currentUser: Express.User, @Param('clubId', ParseUUIDPipe) clubId: string) {
     return this.bookClubsService.getClub(clubId, currentUser.id);
+  }
+
+  @Get(':clubId/schedule')
+  getSchedule(@CurrentUser() currentUser: Express.User, @Param('clubId', ParseUUIDPipe) clubId: string) {
+    return this.bookClubsService.getSchedule(clubId, currentUser.id);
+  }
+
+  @Put(':clubId/schedule')
+  updateSchedule(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Body() dto: UpdateBookClubScheduleDto,
+  ) {
+    return this.bookClubsService.updateSchedule(clubId, currentUser.id, dto);
+  }
+
+  @Put(':clubId/progress-sharing')
+  setProgressSharing(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Body() dto: SetBookClubProgressSharingDto,
+  ) {
+    return this.bookClubsService.setProgressSharing(clubId, currentUser.id, dto.enabled);
+  }
+
+  @Put(':clubId/milestones/:milestoneId/mapping')
+  setMilestoneMapping(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('milestoneId', ParseUUIDPipe) milestoneId: string,
+    @Body() dto: SetBookClubMilestoneMappingDto,
+  ) {
+    return this.bookClubsService.setMilestoneMapping(clubId, milestoneId, currentUser.id, dto);
+  }
+
+  @Delete(':clubId/milestones/:milestoneId/mapping')
+  @HttpCode(204)
+  clearMilestoneMapping(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('milestoneId', ParseUUIDPipe) milestoneId: string,
+  ) {
+    return this.bookClubsService.clearMilestoneMapping(clubId, milestoneId, currentUser.id);
+  }
+
+  @Put(':clubId/milestones/:milestoneId/progress')
+  setMilestoneProgress(
+    @CurrentUser() currentUser: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('milestoneId', ParseUUIDPipe) milestoneId: string,
+    @Body() dto: SetBookClubMilestoneProgressDto,
+  ) {
+    return this.bookClubsService.setMilestoneProgress(clubId, milestoneId, currentUser.id, dto);
   }
 
   @Get(':clubId/works/:workId/reading-copy')

@@ -18,6 +18,15 @@ import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-
 import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
 import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
 import {
+  BookClubMilestoneEntity,
+  BookClubMilestoneKind,
+} from 'src/modules/book-clubs/entities/book-club-milestone.entity';
+import { BookClubMilestoneMappingEntity } from 'src/modules/book-clubs/entities/book-club-milestone-mapping.entity';
+import {
+  BookClubMilestoneProgressEntity,
+  BookClubProgressStatus,
+} from 'src/modules/book-clubs/entities/book-club-milestone-progress.entity';
+import {
   BookClubAssociationMethod,
   BookClubReadingCopySource,
   BookClubRole,
@@ -59,6 +68,22 @@ export interface UpdateBookClubInput {
 export interface SetBookClubReadingCopyInput {
   source: BookClubReadingCopySource.SHARED | BookClubReadingCopySource.PERSONAL;
   bookId: string;
+}
+
+export interface UpdateBookClubScheduleInput {
+  startDate?: string | null;
+  completionDate?: string | null;
+  milestones?: Array<{ name: string; kind: BookClubMilestoneKind; position: number }>;
+}
+
+export interface SetBookClubMilestoneProgressInput {
+  status: BookClubProgressStatus;
+  percentage?: number | null;
+}
+
+export interface SetBookClubMilestoneMappingInput {
+  memberLabel: string;
+  memberPosition?: number | null;
 }
 
 export interface BookClubReadingCopyState {
@@ -193,6 +218,13 @@ export class BookClubsService {
       }
 
       const repository = manager.getRepository(BookClubReadingCopyEntity);
+      const previousAssociation = await repository.findOne({ where: { memberId: actor.id, workId } });
+      if (
+        previousAssociation &&
+        (previousAssociation.bookId !== input.bookId || previousAssociation.source !== input.source)
+      ) {
+        await this.clearMemberWorkProgress(manager, actor.id, workId);
+      }
       await repository.upsert(
         {
           memberId: actor.id,
@@ -477,6 +509,7 @@ export class BookClubsService {
       if (!work) throw new NotFoundException('Book club work not found');
 
       const repository = manager.getRepository(BookClubReadingCopyEntity);
+      await this.clearMemberWorkProgress(manager, actor.id, workId);
       await repository.upsert(
         {
           memberId: actor.id,
@@ -488,6 +521,253 @@ export class BookClubsService {
         },
         ['memberId', 'workId'],
       );
+    });
+  }
+
+  async getSchedule(clubId: string, userId: string) {
+    return this.dataSource.transaction(async (manager) => {
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+      const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { clubId } });
+      if (!work) throw new NotFoundException('Book club work not found');
+      const milestones = await manager.getRepository(BookClubMilestoneEntity).find({
+        where: { workId: work.id },
+        order: { position: 'ASC' },
+      });
+      const memberRepository = manager.getRepository(BookClubMemberEntity);
+      const members = await memberRepository.find({ where: { clubId } });
+      const memberIds = members.map((member) => member.id);
+      const readingCopies = memberIds.length
+        ? await manager
+            .getRepository(BookClubReadingCopyEntity)
+            .find({ where: { memberId: In(memberIds), workId: work.id } })
+        : [];
+      const selectedCopies = new Map(
+        readingCopies
+          .filter((copy) => copy.bookId && copy.source !== BookClubReadingCopySource.NONE)
+          .map((copy) => [copy.memberId, copy]),
+      );
+
+      if (isCloudMode() && selectedCopies.size > 0) {
+        const selectedBookIds = [...selectedCopies.values()].map((copy) => copy.bookId!);
+        const books = await manager.getRepository(BookEntity).find({
+          select: { id: true, uploadedByUserId: true },
+          where: { id: In(selectedBookIds), deletedAt: IsNull() },
+          lock: { mode: 'pessimistic_write' },
+        });
+        const authorizedBookOwners = new Map(books.map((book) => [book.id, book.uploadedByUserId]));
+        for (const member of members) {
+          const copy = selectedCopies.get(member.id);
+          if (
+            copy &&
+            (copy.source !== BookClubReadingCopySource.PERSONAL ||
+              authorizedBookOwners.get(copy.bookId!) !== member.userId)
+          ) {
+            selectedCopies.delete(member.id);
+          }
+        }
+      }
+
+      const mappingRepository = manager.getRepository(BookClubMilestoneMappingEntity);
+      const progressRepository = manager.getRepository(BookClubMilestoneProgressEntity);
+      const myMappings = await mappingRepository.find({ where: { memberId: actor.id, workId: work.id } });
+      const myProgress = selectedCopies.has(actor.id)
+        ? await progressRepository.find({ where: { memberId: actor.id, workId: work.id } })
+        : [];
+      const shareableMembers = members.filter(
+        (member) => member.id !== actor.id && member.progressSharingEnabled && selectedCopies.has(member.id),
+      );
+      const sharedProgressRows = shareableMembers.length
+        ? await progressRepository.find({
+            where: { memberId: In(shareableMembers.map((member) => member.id)), workId: work.id },
+          })
+        : [];
+      const sharedProgress = shareableMembers.flatMap((member) => {
+        const memberProgress = sharedProgressRows
+          .filter((progress) => progress.memberId === member.id)
+          .map(({ milestoneId, status, percentage }) => ({ milestoneId, status, percentage: percentage ?? null }));
+        return memberProgress.length ? [{ userId: member.userId, milestones: memberProgress }] : [];
+      });
+
+      return {
+        clubId,
+        startDate: club.startDate ?? null,
+        completionDate: club.completionDate ?? null,
+        milestones: milestones.map(({ id, name, kind, position }) => ({ id, name, kind, position })),
+        progressSharingEnabled: actor.progressSharingEnabled ?? false,
+        myMappings: myMappings.map(({ milestoneId, memberLabel, memberPosition }) => ({
+          milestoneId,
+          memberLabel,
+          memberPosition: memberPosition ?? null,
+        })),
+        myProgress: myProgress.map(({ milestoneId, status, percentage }) => ({
+          milestoneId,
+          status,
+          percentage: percentage ?? null,
+        })),
+        sharedProgress,
+      };
+    });
+  }
+
+  async updateSchedule(clubId: string, userId: string, input: UpdateBookClubScheduleInput) {
+    return this.dataSource.transaction(async (manager) => {
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+      if (club.status !== BookClubStatus.ACTIVE) {
+        throw new ForbiddenException('Archived book clubs cannot be changed');
+      }
+      if (actor.role !== BookClubRole.OWNER && actor.role !== BookClubRole.MODERATOR) {
+        throw new ForbiddenException('Club schedule management permission required');
+      }
+
+      const startDate = input.startDate === undefined ? (club.startDate ?? null) : input.startDate;
+      const completionDate = input.completionDate === undefined ? (club.completionDate ?? null) : input.completionDate;
+      if ((startDate && !isDateOnly(startDate)) || (completionDate && !isDateOnly(completionDate))) {
+        throw new BadRequestException('Schedule dates must be valid ISO calendar dates');
+      }
+      if (startDate && completionDate && startDate > completionDate) {
+        throw new BadRequestException('Schedule completion date cannot be earlier than its start date');
+      }
+
+      let work: BookClubWorkEntity | null = null;
+      if (input.milestones !== undefined) {
+        const positions = input.milestones.map(({ position }) => position);
+        if (
+          input.milestones.some(
+            ({ name, kind, position }) =>
+              !name.trim() ||
+              name.length > 120 ||
+              !Object.values(BookClubMilestoneKind).includes(kind) ||
+              !Number.isInteger(position) ||
+              position < 1,
+          ) ||
+          new Set(positions).size !== positions.length
+        ) {
+          throw new BadRequestException('Milestones require unique positive positions, valid kinds, and names');
+        }
+        work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { clubId } });
+        if (!work) throw new NotFoundException('Book club work not found');
+      }
+
+      club.startDate = startDate;
+      club.completionDate = completionDate;
+      await manager.getRepository(BookClubEntity).save(club);
+
+      let milestones: BookClubMilestoneEntity[] = [];
+      if (input.milestones !== undefined && work) {
+        const workId = work.id;
+        const repository = manager.getRepository(BookClubMilestoneEntity);
+        await repository.delete({ workId });
+        milestones = await repository.save(
+          input.milestones.map((milestone) => ({ id: randomUUID(), workId, ...milestone })),
+        );
+      } else if (input.milestones === undefined) {
+        const selectedWork = await manager.getRepository(BookClubWorkEntity).findOne({ where: { clubId } });
+        if (!selectedWork) throw new NotFoundException('Book club work not found');
+        milestones = await manager.getRepository(BookClubMilestoneEntity).find({
+          where: { workId: selectedWork.id },
+          order: { position: 'ASC' },
+        });
+      }
+
+      return {
+        clubId,
+        startDate: club.startDate ?? null,
+        completionDate: club.completionDate ?? null,
+        milestones: milestones
+          .sort((left, right) => left.position - right.position)
+          .map(({ id, name, kind, position }) => ({ id, name, kind, position })),
+      };
+    });
+  }
+
+  async setProgressSharing(clubId: string, userId: string, enabled: boolean): Promise<{ enabled: boolean }> {
+    if (typeof enabled !== 'boolean') throw new BadRequestException('Progress-sharing preference must be a boolean');
+    return this.dataSource.transaction(async (manager) => {
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
+      if (!actor) throw new ForbiddenException('Book club membership required');
+      if (club.status !== BookClubStatus.ACTIVE) {
+        throw new ForbiddenException('Archived book clubs cannot be changed');
+      }
+      actor.progressSharingEnabled = enabled;
+      await manager.getRepository(BookClubMemberEntity).save(actor);
+      return { enabled };
+    });
+  }
+
+  async setMilestoneMapping(
+    clubId: string,
+    milestoneId: string,
+    userId: string,
+    input: SetBookClubMilestoneMappingInput,
+  ) {
+    return this.dataSource.transaction(async (manager) => {
+      const context = await this.getMemberMilestoneContext(manager, clubId, milestoneId, userId);
+      if (
+        !input.memberLabel.trim() ||
+        input.memberLabel.length > 120 ||
+        (input.memberPosition !== undefined &&
+          input.memberPosition !== null &&
+          (!Number.isInteger(input.memberPosition) || input.memberPosition < 1))
+      ) {
+        throw new BadRequestException('Member milestone mapping requires a label and a positive optional position');
+      }
+      await manager.getRepository(BookClubMilestoneMappingEntity).upsert(
+        {
+          memberId: context.actor.id,
+          workId: context.work.id,
+          milestoneId,
+          memberLabel: input.memberLabel,
+          memberPosition: input.memberPosition ?? null,
+        },
+        ['memberId', 'milestoneId'],
+      );
+      return {
+        milestoneId,
+        memberLabel: input.memberLabel,
+        memberPosition: input.memberPosition ?? null,
+      };
+    });
+  }
+
+  async clearMilestoneMapping(clubId: string, milestoneId: string, userId: string): Promise<void> {
+    return this.dataSource.transaction(async (manager) => {
+      const context = await this.getMemberMilestoneContext(manager, clubId, milestoneId, userId);
+      await manager.getRepository(BookClubMilestoneMappingEntity).delete({
+        memberId: context.actor.id,
+        milestoneId,
+      });
+    });
+  }
+
+  async setMilestoneProgress(
+    clubId: string,
+    milestoneId: string,
+    userId: string,
+    input: SetBookClubMilestoneProgressInput,
+  ) {
+    return this.dataSource.transaction(async (manager) => {
+      const context = await this.getMemberMilestoneContext(manager, clubId, milestoneId, userId);
+      if (
+        !Object.values(BookClubProgressStatus).includes(input.status) ||
+        (input.percentage !== undefined &&
+          input.percentage !== null &&
+          (!Number.isInteger(input.percentage) || input.percentage < 0 || input.percentage > 100))
+      ) {
+        throw new BadRequestException('Progress requires a supported status and optional percentage from 0 to 100');
+      }
+      await manager.getRepository(BookClubMilestoneProgressEntity).upsert(
+        {
+          memberId: context.actor.id,
+          workId: context.work.id,
+          milestoneId,
+          status: input.status,
+          percentage: input.percentage ?? null,
+        },
+        ['memberId', 'milestoneId'],
+      );
+      return { milestoneId, status: input.status, percentage: input.percentage ?? null };
     });
   }
 
@@ -672,6 +952,10 @@ export class BookClubsService {
         });
         await workRepository.save(work);
         if (workReplaced) {
+          club.startDate = null;
+          club.completionDate = null;
+          await clubRepository.save(club);
+          await manager.getRepository(BookClubMilestoneEntity).delete({ workId: work.id });
           await manager.getRepository(BookClubReadingCopyEntity).update(
             { workId: work.id },
             {
@@ -710,6 +994,51 @@ export class BookClubsService {
       }
       await clubRepository.delete({ id: clubId });
     });
+  }
+
+  private async clearMemberWorkProgress(manager: EntityManager, memberId: string, workId: string): Promise<void> {
+    await manager.getRepository(BookClubMilestoneProgressEntity).delete({ memberId, workId });
+    await manager.getRepository(BookClubMilestoneMappingEntity).delete({ memberId, workId });
+  }
+
+  private async getMemberMilestoneContext(
+    manager: EntityManager,
+    clubId: string,
+    milestoneId: string,
+    userId: string,
+  ): Promise<{ actor: BookClubMemberEntity; work: BookClubWorkEntity }> {
+    const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
+    if (!actor) throw new ForbiddenException('Book club membership required');
+    if (club.status !== BookClubStatus.ACTIVE) {
+      throw new ForbiddenException('Archived book clubs cannot be changed');
+    }
+
+    const milestone = await manager.getRepository(BookClubMilestoneEntity).findOne({ where: { id: milestoneId } });
+    if (!milestone) throw new NotFoundException('Book club milestone not found');
+    const work = await manager.getRepository(BookClubWorkEntity).findOne({ where: { id: milestone.workId, clubId } });
+    if (!work) throw new NotFoundException('Book club milestone not found');
+
+    const copy = await manager.getRepository(BookClubReadingCopyEntity).findOne({
+      where: { memberId: actor.id, workId: work.id },
+    });
+    if (!copy?.bookId || copy.source === BookClubReadingCopySource.NONE) {
+      throw new ForbiddenException('Select a reading copy before updating milestone progress');
+    }
+    if (isCloudMode()) {
+      if (copy.source !== BookClubReadingCopySource.PERSONAL) {
+        throw new ForbiddenException('A currently authorized personal reading copy is required');
+      }
+      const book = await manager.getRepository(BookEntity).findOne({
+        select: { id: true },
+        where: { id: copy.bookId, uploadedByUserId: userId, deletedAt: IsNull() },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!book) throw new NotFoundException('Book not found');
+    } else {
+      if (!this.bookService) throw new Error('Book access service is not configured');
+      await this.bookService.getBookById(copy.bookId, userId);
+    }
+    return { actor, work };
   }
 
   private async getVisibleClub(
@@ -802,6 +1131,12 @@ export class BookClubsService {
       return Object.assign(club, { selectedWork });
     });
   }
+}
+
+function isDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function sameWorkMatchMetadata(left: BookClubWorkEntity, right: BookClubWorkEntity): boolean {
