@@ -94,6 +94,13 @@ export class BookController {
     return this.bookService.getFavoriteBooks({ ...paginationDto, userId: currentUser.id });
   }
 
+  @Get('mine')
+  @UseGuards(JwtAuthGuard)
+  getCurrentUserBooks(@Query() paginationDto: GetBooksRequest, @CurrentUser() currentUser: Express.User) {
+    this.logger.log('Get current user books request received');
+    return this.bookService.getCurrentUserBooks(paginationDto, currentUser.id);
+  }
+
   @Get('genres')
   @UseGuards(JwtAuthGuard)
   getGenres(@CurrentUser() currentUser: Express.User) {
