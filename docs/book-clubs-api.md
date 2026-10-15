@@ -15,6 +15,8 @@ All routes require the existing JWT authentication guard. The authenticated acco
 
 ## Routes
 
+Book Club selectors can obtain the authenticated caller's own uploaded library through `GET /books/mine`. It accepts the same query, filter, and pagination fields as `GET /books`; its owner scope always comes from the authenticated token, and any `userId` query value is ignored.
+
 | Method   | Path                                                             | Behavior                                                                                                                                                      |
 | -------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST`   | `/book-clubs`                                                    | Create a club; caller becomes owner and initial member. Requires `name`, `visibility`, and `selectedWork: { title, author }`; optional `description`.         |

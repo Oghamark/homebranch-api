@@ -54,6 +54,14 @@ export class BookService {
     return this.bookPersistenceService.findBooks(limit, offset, userId, viewerUserId);
   }
 
+  async getCurrentUserBooks(request: GetBooksRequest, currentUserId: string): Promise<PaginationResult<Book[]>> {
+    return this.getBooks({
+      ...request,
+      userId: currentUserId,
+      viewerUserId: currentUserId,
+    });
+  }
+
   async getNewArrivals(limit?: number, offset?: number, ownerScope?: string): Promise<PaginationResult<Book[]>> {
     return this.bookPersistenceService.findNewArrivals(limit, offset, ownerScope);
   }
