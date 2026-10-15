@@ -6,6 +6,7 @@ import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-wo
 import { BookClubMilestoneEntity } from 'src/modules/book-clubs/entities/book-club-milestone.entity';
 import { BookClubRole, BookClubStatus, BookClubVisibility } from 'src/modules/book-clubs/book-club.types';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
+import { BookEntity } from 'src/modules/book/book.entity';
 
 describe('BookClubsService', () => {
   const clubRepository = {
@@ -33,12 +34,14 @@ describe('BookClubsService', () => {
     update: jest.fn<Promise<unknown>, [unknown, unknown]>(),
   };
   const milestoneRepository = { delete: jest.fn<Promise<unknown>, [unknown]>() };
+  const bookRepository = { find: jest.fn<Promise<unknown[]>, [unknown]>() };
   const repositories = new Map<unknown, unknown>([
     [BookClubEntity, clubRepository],
     [BookClubMemberEntity, memberRepository],
     [BookClubWorkEntity, workRepository],
     [BookClubReadingCopyEntity, readingCopyRepository],
     [BookClubMilestoneEntity, milestoneRepository],
+    [BookEntity, bookRepository],
   ]);
   const manager = {
     getRepository: (entity: unknown) => repositories.get(entity),
@@ -61,6 +64,7 @@ describe('BookClubsService', () => {
     clubRepository.delete.mockReset().mockResolvedValue({ affected: 1 });
     memberRepository.find.mockReset().mockResolvedValue([]);
     workRepository.find.mockReset().mockResolvedValue([]);
+    bookRepository.find.mockReset().mockResolvedValue([]);
     service = new BookClubsService(dataSource);
   });
 
@@ -183,6 +187,128 @@ describe('BookClubsService', () => {
     expect(clubs.map((club) => club.id)).toEqual(['visible', 'private-member']);
     expect(clubs[1].selectedWork.title).toBe('Work B');
     expect(clubs.map((club) => club.currentMembershipRole)).toEqual([null, BookClubRole.MEMBER]);
+  });
+
+  describe('club cover artwork', () => {
+    const work = { id: 'work-1', clubId: 'club-1', title: 'The Orchard', author: 'A. Writer', isbn: '9781234567890' };
+    const club = {
+      id: 'club-1',
+      ownerUserId: 'owner',
+      visibility: BookClubVisibility.INSTANCE_VISIBLE,
+      status: BookClubStatus.ACTIVE,
+    };
+    const coverBook = { id: 'book-1', title: work.title, author: work.author, coverImageFileName: 'orchard.jpg' };
+    const originalCloudMode = process.env.CLOUD_MODE;
+
+    beforeEach(() => {
+      process.env.CLOUD_MODE = 'false';
+      clubRepository.find.mockResolvedValue([club]);
+      clubRepository.findOne.mockResolvedValue({ ...club });
+      workRepository.find.mockResolvedValue([work]);
+      workRepository.findOne.mockResolvedValue(work);
+      bookRepository.find.mockResolvedValue([coverBook]);
+    });
+
+    afterEach(() => {
+      if (originalCloudMode === undefined) delete process.env.CLOUD_MODE;
+      else process.env.CLOUD_MODE = originalCloudMode;
+    });
+
+    it('uses actual artwork for existing clubs without exposing a source book or choosing a reading copy', async () => {
+      const [result] = await service.listClubs('viewer');
+      expect(result.selectedWork).toEqual({ ...work, coverImageFileName: 'orchard.jpg' });
+      expect(result.selectedWork).not.toHaveProperty('bookId');
+      expect(result.selectedWork).not.toHaveProperty('fileName');
+      expect(result.selectedWork).not.toHaveProperty('formats');
+      expect(work).not.toHaveProperty('coverImageFileName');
+      expect(readingCopyRepository.upsert).not.toHaveBeenCalled();
+      expect(workRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('batches artwork lookup across visible clubs and never queries a concealed club work', async () => {
+      clubRepository.find.mockResolvedValue([
+        club,
+        { ...club, id: 'club-2' },
+        {
+          ...club,
+          id: 'hidden-club',
+          visibility: BookClubVisibility.PRIVATE,
+        },
+      ]);
+      workRepository.find.mockResolvedValue([work, { ...work, id: 'work-2', clubId: 'club-2', title: 'Another Book' }]);
+      const result = await service.listClubs('viewer');
+      expect(result).toHaveLength(2);
+      expect(bookRepository.find).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(bookRepository.find.mock.calls)).not.toContain('hidden-club');
+    });
+
+    it('prioritizes identifier-matched artwork over another edition matched only by title and author', async () => {
+      bookRepository.find.mockResolvedValue([
+        { ...coverBook, id: 'a', coverImageFileName: 'other-edition.jpg' },
+        { ...coverBook, id: 'z', isbn: work.isbn, coverImageFileName: 'exact-edition.jpg' },
+      ]);
+      expect((await service.getClub(club.id, 'viewer')).selectedWork.coverImageFileName).toBe('exact-edition.jpg');
+    });
+
+    it('uses matching format artwork rather than an unrelated parent cover', async () => {
+      bookRepository.find.mockResolvedValue([
+        {
+          ...coverBook,
+          title: 'A Different Work',
+          coverImageFileName: 'wrong.jpg',
+          formats: [{ ...coverBook, id: 'format-1', isbn: work.isbn, coverImageFileName: 'format-cover.jpg' }],
+        },
+      ]);
+      expect((await service.getClub(club.id, 'viewer')).selectedWork.coverImageFileName).toBe('format-cover.jpg');
+    });
+
+    it('leaves artwork absent when no matching edition has an image', async () => {
+      bookRepository.find.mockResolvedValue([
+        { ...coverBook, coverImageFileName: null },
+        { ...coverBook, id: 'wrong-work', externalWorkId: 'other-work', title: 'An Unrelated Book' },
+      ]);
+      expect((await service.getClub(club.id, 'viewer')).selectedWork.coverImageFileName).toBeUndefined();
+    });
+
+    it('restricts every Cloud lookup branch to the caller and excludes deleted books and private file metadata', async () => {
+      process.env.CLOUD_MODE = 'true';
+      await service.getClub(club.id, 'viewer');
+      expect(bookRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.not.objectContaining({ fileName: true, uploadedByUserId: true }),
+          where: expect.arrayContaining([
+            expect.objectContaining({ title: expect.anything() }),
+            expect.objectContaining({ isbn: work.isbn }),
+            expect.objectContaining({ formats: { isbn: work.isbn } }),
+          ]),
+        }),
+      );
+      const options = bookRepository.find.mock.calls[0][0] as {
+        where: Array<{ uploadedByUserId: string; deletedAt: { type: string } }>;
+      };
+      expect(options.where.length).toBeGreaterThan(0);
+      for (const branch of options.where) {
+        expect(branch.uploadedByUserId).toBe('viewer');
+        expect(branch.deletedAt.type).toBe('isNull');
+      }
+    });
+
+    it('does not look up artwork when a private club is inaccessible', async () => {
+      clubRepository.findOne.mockResolvedValue({ ...club, visibility: BookClubVisibility.PRIVATE });
+      await expect(service.getClub(club.id, 'viewer')).rejects.toMatchObject({ status: 404 });
+      expect(bookRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('includes artwork in archived club and creation responses', async () => {
+      memberRepository.find.mockResolvedValue([{ clubId: club.id, userId: 'viewer', role: BookClubRole.MEMBER }]);
+      expect((await service.listArchivedClubs('viewer'))[0].selectedWork.coverImageFileName).toBe('orchard.jpg');
+      const created = await service.createClub('viewer', {
+        name: 'Orchard readers',
+        visibility: BookClubVisibility.INSTANCE_VISIBLE,
+        selectedWork: { title: work.title, author: work.author, isbn: work.isbn },
+      });
+      expect(created.selectedWork.coverImageFileName).toBe('orchard.jpg');
+    });
   });
 
   it('lists only archived clubs that the caller belongs to', async () => {

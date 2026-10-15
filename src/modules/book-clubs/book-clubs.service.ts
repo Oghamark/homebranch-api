@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
-import { DataSource, EntityManager, In, IsNull } from 'typeorm';
+import { DataSource, EntityManager, FindOptionsWhere, ILike, In, IsNull } from 'typeorm';
 import { isCloudMode } from 'src/common/utils/cloud';
 import { BookEntity } from 'src/modules/book/book.entity';
 import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
@@ -45,6 +45,8 @@ export interface BookClubWorkInput {
   series?: string;
   seriesPosition?: number;
 }
+
+export type BookClubWorkPresentation = BookClubWorkEntity & { coverImageFileName?: string };
 
 export interface CreateBookClubInput {
   name: string;
@@ -848,7 +850,9 @@ export class BookClubsService {
 
   async listClubs(
     userId: string,
-  ): Promise<Array<BookClubEntity & { selectedWork: BookClubWorkEntity; currentMembershipRole: BookClubRole | null }>> {
+  ): Promise<
+    Array<BookClubEntity & { selectedWork: BookClubWorkPresentation; currentMembershipRole: BookClubRole | null }>
+  > {
     return this.dataSource.transaction(async (manager) => {
       const clubRepository = manager.getRepository(BookClubEntity);
       const memberRepository = manager.getRepository(BookClubMemberEntity);
@@ -864,7 +868,11 @@ export class BookClubsService {
       );
       if (visibleClubs.length === 0) return [];
 
-      const works = await workRepository.find({ where: { clubId: In(visibleClubs.map((club) => club.id)) } });
+      const works = await this.presentWorks(
+        manager,
+        userId,
+        await workRepository.find({ where: { clubId: In(visibleClubs.map((club) => club.id)) } }),
+      );
       const worksByClub = new Map(works.map((work) => [work.clubId, work]));
       return visibleClubs
         .filter((club) => worksByClub.has(club.id))
@@ -879,7 +887,9 @@ export class BookClubsService {
 
   async listArchivedClubs(
     userId: string,
-  ): Promise<Array<BookClubEntity & { selectedWork: BookClubWorkEntity; currentMembershipRole: BookClubRole | null }>> {
+  ): Promise<
+    Array<BookClubEntity & { selectedWork: BookClubWorkPresentation; currentMembershipRole: BookClubRole | null }>
+  > {
     return this.dataSource.transaction(async (manager) => {
       const memberRepository = manager.getRepository(BookClubMemberEntity);
       const clubRepository = manager.getRepository(BookClubEntity);
@@ -894,7 +904,11 @@ export class BookClubsService {
       });
       if (clubs.length === 0) return [];
 
-      const works = await workRepository.find({ where: { clubId: In(clubs.map((club) => club.id)) } });
+      const works = await this.presentWorks(
+        manager,
+        userId,
+        await workRepository.find({ where: { clubId: In(clubs.map((club) => club.id)) } }),
+      );
       const worksByClub = new Map(works.map((work) => [work.clubId, work]));
       return clubs
         .filter((club) => worksByClub.has(club.id))
@@ -1087,7 +1101,7 @@ export class BookClubsService {
   async getClub(
     clubId: string,
     userId: string,
-  ): Promise<BookClubEntity & { selectedWork: BookClubWorkEntity; currentMembershipRole: BookClubRole | null }> {
+  ): Promise<BookClubEntity & { selectedWork: BookClubWorkPresentation; currentMembershipRole: BookClubRole | null }> {
     return this.dataSource.transaction(async (manager) => {
       const workRepository = manager.getRepository(BookClubWorkEntity);
       const { club, actor } = await this.getVisibleClub(manager, clubId, userId);
@@ -1097,7 +1111,8 @@ export class BookClubsService {
 
       const selectedWork = await workRepository.findOne({ where: { clubId } });
       if (!selectedWork) throw new NotFoundException('Book club not found');
-      return Object.assign(club, { selectedWork, currentMembershipRole: actor?.role ?? null });
+      const [presentedWork] = await this.presentWorks(manager, userId, [selectedWork]);
+      return Object.assign(club, { selectedWork: presentedWork, currentMembershipRole: actor?.role ?? null });
     });
   }
 
@@ -1227,10 +1242,60 @@ export class BookClubsService {
     return books.map((book) => Object.assign(book, { formats: formatsByBookId.get(book.id) ?? [] }));
   }
 
+  private async presentWorks(
+    manager: EntityManager,
+    userId: string,
+    works: BookClubWorkEntity[],
+  ): Promise<BookClubWorkPresentation[]> {
+    if (works.length === 0) return [];
+
+    const scope = { deletedAt: IsNull(), ...(isCloudMode() ? { uploadedByUserId: userId } : {}) };
+    const where = works.flatMap((work): FindOptionsWhere<BookEntity>[] => {
+      const title = ILike(work.title.replace(/[\\%_]/g, '\\$&'));
+      const criteria: FindOptionsWhere<BookEntity>[] = [{ title }, { formats: { title } }];
+      for (const key of ['isbn', 'externalWorkId', 'editionId'] as const) {
+        if (work[key]) criteria.push({ [key]: work[key] }, { formats: { [key]: work[key] } });
+      }
+      return criteria.map((criterion) => ({ ...criterion, ...scope }));
+    });
+    const metadata = {
+      id: true,
+      title: true,
+      author: true,
+      isbn: true,
+      externalWorkId: true,
+      editionId: true,
+      series: true,
+      seriesPosition: true,
+      coverImageFileName: true,
+    } as const;
+    const books = await manager.getRepository(BookEntity).find({
+      select: { ...metadata, formats: metadata },
+      relations: { formats: true },
+      where,
+    });
+    const editions = books
+      .flatMap((book) => [
+        { ...book, formats: [] },
+        ...(book.formats ?? []).map((format) => ({
+          ...format,
+          title: format.title ?? book.title,
+          author: format.author ?? book.author,
+        })),
+      ])
+      .filter((edition) => edition.coverImageFileName);
+    const coversByEdition = new Map(editions.map((edition) => [edition.id, edition.coverImageFileName]));
+
+    return works.map((work) => {
+      const match = matchBookClubWork(work, editions)[0];
+      return { ...work, coverImageFileName: match ? coversByEdition.get(match.bookId) : undefined };
+    });
+  }
+
   async createClub(
     userId: string,
     input: CreateBookClubInput,
-  ): Promise<BookClubEntity & { selectedWork: BookClubWorkEntity }> {
+  ): Promise<BookClubEntity & { selectedWork: BookClubWorkPresentation }> {
     return this.dataSource.transaction(async (manager) => {
       const clubRepository = manager.getRepository(BookClubEntity);
       const memberRepository = manager.getRepository(BookClubMemberEntity);
@@ -1246,7 +1311,8 @@ export class BookClubsService {
       await clubRepository.save(club);
       await memberRepository.save(memberRepository.create({ clubId: club.id, userId, role: BookClubRole.OWNER }));
       const selectedWork = await workRepository.save(workRepository.create({ clubId: club.id, ...input.selectedWork }));
-      return Object.assign(club, { selectedWork });
+      const [presentedWork] = await this.presentWorks(manager, userId, [selectedWork]);
+      return Object.assign(club, { selectedWork: presentedWork });
     });
   }
 }
