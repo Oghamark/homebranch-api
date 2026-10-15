@@ -73,7 +73,9 @@ export class BookClubDiscussionService {
       await this.member(manager, clubId, userId, true);
       const thread = await this.thread(manager, clubId, threadId);
       this.assertAuthorEditable(thread, userId);
-      Object.assign(thread, input);
+      if (input.title !== undefined) thread.title = input.title;
+      if (input.body !== undefined) thread.body = input.body;
+      if (input.spoiler !== undefined) thread.spoiler = input.spoiler;
       return this.threadResponse(await manager.getRepository(BookClubDiscussionThreadEntity).save(thread), false);
     });
   }
@@ -130,7 +132,8 @@ export class BookClubDiscussionService {
       this.assertAuthorEditable(reply, userId);
       if (thread.locked || thread.hidden || thread.deleted)
         throw new ForbiddenException('Thread is not open for edits');
-      Object.assign(reply, input);
+      if (input.body !== undefined) reply.body = input.body;
+      if (input.spoiler !== undefined) reply.spoiler = input.spoiler;
       return this.replyResponse(await manager.getRepository(BookClubDiscussionReplyEntity).save(reply), false);
     });
   }

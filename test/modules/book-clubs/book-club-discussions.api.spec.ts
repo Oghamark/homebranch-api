@@ -75,4 +75,58 @@ describe('discussion API', () => {
     expect(await response.json()).toEqual([]);
     expect(discussion.listRecoveryTargets).toHaveBeenCalledWith(id, 'moderator');
   });
+  it.each(['title', 'body', 'spoiler'])('rejects null %s values in discussion updates', async (field) => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const threadId = '123e4567-e89b-42d3-a456-426614174002';
+    const response = await fetch(`${url}/book-clubs/${clubId}/discussions/${threadId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'author' },
+      body: JSON.stringify({ [field]: null }),
+    });
+    expect(response.status).toBe(400);
+    expect(discussion.editThread).not.toHaveBeenCalled();
+  });
+  it('allows an omitted discussion update field through transformed controller input', async () => {
+    discussion.editThread.mockResolvedValue({ id: 'thread' });
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const threadId = '123e4567-e89b-42d3-a456-426614174002';
+    const response = await fetch(`${url}/book-clubs/${clubId}/discussions/${threadId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'author' },
+      body: JSON.stringify({ body: 'Updated body' }),
+    });
+    expect(response.status).toBe(200);
+    expect(discussion.editThread).toHaveBeenCalledWith(
+      clubId,
+      threadId,
+      'author',
+      expect.objectContaining({ body: 'Updated body' }),
+    );
+  });
+  it('rejects a null reply spoiler and permits an omitted spoiler', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174001';
+    const threadId = '123e4567-e89b-42d3-a456-426614174002';
+    const endpoint = `${url}/book-clubs/${clubId}/discussions/${threadId}/replies`;
+    const invalid = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'author' },
+      body: JSON.stringify({ body: 'reply', spoiler: null }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(discussion.createReply).not.toHaveBeenCalled();
+
+    discussion.createReply.mockResolvedValue({ id: 'reply' });
+    const valid = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'author' },
+      body: JSON.stringify({ body: 'reply' }),
+    });
+    expect(valid.status).toBe(201);
+    expect(discussion.createReply).toHaveBeenCalledWith(
+      clubId,
+      threadId,
+      'author',
+      expect.objectContaining({ body: 'reply' }),
+    );
+  });
 });

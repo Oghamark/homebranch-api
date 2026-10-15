@@ -1,6 +1,6 @@
-import { IsBoolean, IsOptional, IsString, Length } from 'class-validator';
+import { IsBoolean, IsString, Length, ValidateIf } from 'class-validator';
 export class UpdateBookClubDiscussionDto {
-  @IsOptional() @IsString() @Length(1, 160) title?: string;
-  @IsOptional() @IsString() @Length(1, 10000) body?: string;
-  @IsOptional() @IsBoolean() spoiler?: boolean;
+  @ValidateIf((_object, value) => value !== undefined) @IsString() @Length(1, 160) title?: string;
+  @ValidateIf((_object, value) => value !== undefined) @IsString() @Length(1, 10000) body?: string;
+  @ValidateIf((_object, value) => value !== undefined) @IsBoolean() spoiler?: boolean;
 }

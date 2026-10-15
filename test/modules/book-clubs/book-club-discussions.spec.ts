@@ -300,6 +300,65 @@ describe('BookClubDiscussionService', () => {
       ForbiddenException,
     );
   });
+  it('preserves omitted transformed thread fields when editing a spoiler thread body', async () => {
+    const { service, threads } = fixture();
+    threads.push({
+      id: 'thread-1',
+      clubId: ids.club,
+      authorUserId: ids.member,
+      title: 'Original title',
+      body: 'Original spoiler body',
+      spoiler: true,
+      locked: false,
+      pinned: false,
+      hidden: false,
+      deleted: false,
+    });
+
+    const edited = await service.editThread(ids.club, 'thread-1', ids.member, {
+      title: undefined,
+      body: 'Updated spoiler body',
+      spoiler: undefined,
+    });
+
+    expect(threads[0]).toMatchObject({ title: 'Original title', body: 'Updated spoiler body', spoiler: true });
+    expect(edited).toMatchObject({ title: 'Original title', spoiler: true });
+    expect(edited).not.toHaveProperty('body');
+  });
+  it('preserves an omitted transformed reply spoiler when editing its body', async () => {
+    const { service, threads, replies } = fixture();
+    threads.push({
+      id: 'thread-1',
+      clubId: ids.club,
+      authorUserId: ids.member,
+      title: 'Post',
+      body: 'body',
+      spoiler: false,
+      locked: false,
+      pinned: false,
+      hidden: false,
+      deleted: false,
+    });
+    replies.push({
+      id: 'reply-1',
+      clubId: ids.club,
+      threadId: 'thread-1',
+      authorUserId: ids.member,
+      body: 'Original spoiler reply',
+      spoiler: true,
+      hidden: false,
+      deleted: false,
+    });
+
+    const edited = await service.editReply(ids.club, 'reply-1', ids.member, {
+      body: 'Updated spoiler reply',
+      spoiler: undefined,
+    });
+
+    expect(replies[0]).toMatchObject({ body: 'Updated spoiler reply', spoiler: true });
+    expect(edited).toMatchObject({ spoiler: true });
+    expect(edited).not.toHaveProperty('body');
+  });
   it.each(['hidden', 'deleted'] as const)('does not disclose replies below a %s thread', async (state) => {
     const { service, threads, replies } = fixture();
     threads.push({
