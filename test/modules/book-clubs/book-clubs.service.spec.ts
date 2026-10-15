@@ -64,6 +64,71 @@ describe('BookClubsService', () => {
     service = new BookClubsService(dataSource);
   });
 
+  it('returns only user IDs and club roles to owners and moderators', async () => {
+    const club = {
+      id: 'club-1',
+      visibility: BookClubVisibility.PRIVATE,
+      status: BookClubStatus.ACTIVE,
+    };
+    clubRepository.findOne.mockResolvedValue(club);
+    memberRepository.findOne.mockResolvedValue({
+      clubId: club.id,
+      userId: 'moderator-1',
+      role: BookClubRole.MODERATOR,
+    });
+    memberRepository.find.mockResolvedValue([
+      { userId: 'owner-1', role: BookClubRole.OWNER, personalBookId: 'private-book', progressSharingEnabled: true },
+      {
+        userId: 'member-1',
+        role: BookClubRole.MEMBER,
+        personalBookId: 'another-private-book',
+        progressSharingEnabled: false,
+      },
+    ]);
+
+    const roster = await service.listMembers(club.id, 'moderator-1');
+
+    expect(roster).toEqual([
+      { userId: 'owner-1', role: BookClubRole.OWNER },
+      { userId: 'member-1', role: BookClubRole.MEMBER },
+    ]);
+    expect(memberRepository.find).toHaveBeenCalledWith({
+      select: { userId: true, role: true },
+      where: { clubId: club.id },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+  });
+
+  it('serializes roster access behind a concurrent manager role change', async () => {
+    const club = { id: 'club-1', visibility: BookClubVisibility.PRIVATE, status: BookClubStatus.ACTIVE };
+    let actorRole = BookClubRole.MODERATOR;
+    clubRepository.findOne.mockImplementation((options: unknown) => {
+      if ((options as { lock?: { mode: string } }).lock?.mode === 'pessimistic_write') {
+        actorRole = BookClubRole.MEMBER;
+      }
+      return Promise.resolve(club);
+    });
+    memberRepository.findOne.mockImplementation(() =>
+      Promise.resolve({ clubId: club.id, userId: 'moderator-1', role: actorRole }),
+    );
+
+    await expect(service.listMembers(club.id, 'moderator-1')).rejects.toMatchObject({ status: 403 });
+    expect(memberRepository.find).not.toHaveBeenCalled();
+  });
+
+  it('rejects visible-club members who do not manage membership without reading the roster', async () => {
+    const club = {
+      id: 'club-1',
+      visibility: BookClubVisibility.INSTANCE_VISIBLE,
+      status: BookClubStatus.ACTIVE,
+    };
+    clubRepository.findOne.mockResolvedValue(club);
+    memberRepository.findOne.mockResolvedValue({ clubId: club.id, userId: 'member-1', role: BookClubRole.MEMBER });
+
+    await expect(service.listMembers(club.id, 'member-1')).rejects.toMatchObject({ status: 403 });
+    expect(memberRepository.find).not.toHaveBeenCalled();
+  });
+
   it('keeps logical selected work separate from a future per-member personal-copy reference', () => {
     const memberProperties = getMetadataArgsStorage()
       .columns.filter((column) => column.target === BookClubMemberEntity)
@@ -115,6 +180,31 @@ describe('BookClubsService', () => {
     const clubs = await service.listClubs('viewer');
     expect(clubs.map((club) => club.id)).toEqual(['visible', 'private-member']);
     expect(clubs[1].selectedWork.title).toBe('Work B');
+  });
+
+  it('lists only archived clubs that the caller belongs to', async () => {
+    memberRepository.find.mockResolvedValue([
+      { clubId: 'archived-member', userId: 'viewer' },
+      { clubId: 'active-member', userId: 'viewer' },
+    ]);
+    clubRepository.find.mockResolvedValue([
+      { id: 'archived-member', status: BookClubStatus.ARCHIVED },
+      { id: 'archived-other', status: BookClubStatus.ARCHIVED },
+    ]);
+    workRepository.find.mockResolvedValue([{ clubId: 'archived-member', title: 'Archived work' }]);
+
+    const clubs = await service.listArchivedClubs('viewer');
+
+    expect(clubs).toEqual([
+      expect.objectContaining({
+        id: 'archived-member',
+        selectedWork: { clubId: 'archived-member', title: 'Archived work' },
+      }),
+    ]);
+    expect(clubRepository.find).toHaveBeenCalledWith({
+      where: { id: expect.anything(), status: BookClubStatus.ARCHIVED },
+      order: { createdAt: 'DESC' },
+    });
   });
 
   it('allows only the owner to archive a club', async () => {
@@ -374,6 +464,7 @@ describe('BookClubsService', () => {
       () => service.joinClub(club.id, 'outsider'),
       () => service.getClub(club.id, 'outsider'),
       () => service.updateClub(club.id, 'outsider', { name: 'Changed' }),
+      () => service.listMembers(club.id, 'outsider'),
       () => service.addMember(club.id, 'outsider', { userId: targetUserId }),
       () => service.updateMemberRole(club.id, 'outsider', targetUserId, BookClubRole.MODERATOR),
       () => service.removeMember(club.id, 'outsider', targetUserId),

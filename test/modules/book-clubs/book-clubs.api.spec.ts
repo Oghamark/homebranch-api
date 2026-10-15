@@ -21,9 +21,11 @@ class HeaderUserGuard implements CanActivate {
 describe('BookClubsController API', () => {
   const service = {
     listClubs: jest.fn(),
+    listArchivedClubs: jest.fn(),
     joinClub: jest.fn(),
     createClub: jest.fn(),
     getClub: jest.fn(),
+    listMembers: jest.fn(),
     getSchedule: jest.fn(),
     updateClub: jest.fn(),
     addMember: jest.fn(),
@@ -64,6 +66,19 @@ describe('BookClubsController API', () => {
 
   beforeEach(() => jest.clearAllMocks());
   afterAll(async () => app.close());
+
+  it('routes archive discovery to the authenticated caller before the club ID route', async () => {
+    service.listArchivedClubs.mockResolvedValue([{ id: 'archived-club', status: 'archived' }]);
+
+    const response = await fetch(`${baseUrl}/book-clubs/archived`, {
+      headers: { 'x-test-user': 'reader-1' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([{ id: 'archived-club', status: 'archived' }]);
+    expect(service.listArchivedClubs).toHaveBeenCalledWith('reader-1');
+    expect(service.getClub).not.toHaveBeenCalled();
+  });
 
   it('creates a club for an authenticated regular user without instance-admin role', async () => {
     service.createClub.mockResolvedValue({ id: 'club-1', ownerUserId: 'reader-1' });
@@ -140,6 +155,25 @@ describe('BookClubsController API', () => {
     expect(response.status).toBe(200);
     expect(body).toEqual(expect.objectContaining({ currentMembershipRole: 'moderator' }));
     expect(service.getClub).toHaveBeenCalledWith(clubId, 'moderator-1');
+  });
+
+  it('returns a roster with only club-scoped user IDs and roles to the authenticated manager', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174002';
+    service.listMembers.mockResolvedValue([
+      { userId: 'owner-1', role: 'owner' },
+      { userId: 'member-1', role: 'member' },
+    ]);
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}/members`, {
+      headers: { 'x-test-user': 'moderator-1' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([
+      { userId: 'owner-1', role: 'owner' },
+      { userId: 'member-1', role: 'member' },
+    ]);
+    expect(service.listMembers).toHaveBeenCalledWith(clubId, 'moderator-1');
   });
 
   it('does not expose the reserved personal-copy association from membership responses', async () => {
