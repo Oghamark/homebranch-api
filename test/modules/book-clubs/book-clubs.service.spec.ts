@@ -324,6 +324,43 @@ describe('BookClubsService', () => {
     expect(memberRepository.findOne).toHaveBeenCalledWith({ where: { clubId: 'club-1', userId: 'admin-user' } });
   });
 
+  it('returns only the authenticated member role with a readable club', async () => {
+    const club = {
+      id: 'club-1',
+      visibility: BookClubVisibility.INSTANCE_VISIBLE,
+      status: BookClubStatus.ACTIVE,
+    };
+    clubRepository.findOne.mockResolvedValue(club);
+    memberRepository.findOne.mockResolvedValue({
+      clubId: club.id,
+      userId: 'moderator-1',
+      role: BookClubRole.MODERATOR,
+    });
+    workRepository.findOne.mockResolvedValue({ id: 'work-1', clubId: club.id, title: 'Work', author: 'Author' });
+
+    const result = await service.getClub(club.id, 'moderator-1');
+
+    expect(result).toEqual(expect.objectContaining({ currentMembershipRole: BookClubRole.MODERATOR }));
+    expect(memberRepository.findOne).toHaveBeenCalledTimes(1);
+    expect(memberRepository.findOne).toHaveBeenCalledWith({ where: { clubId: club.id, userId: 'moderator-1' } });
+  });
+
+  it('reports no current role to a visible-club non-member without querying other memberships', async () => {
+    const club = {
+      id: 'club-1',
+      visibility: BookClubVisibility.INSTANCE_VISIBLE,
+      status: BookClubStatus.ACTIVE,
+    };
+    clubRepository.findOne.mockResolvedValue(club);
+    workRepository.findOne.mockResolvedValue({ id: 'work-1', clubId: club.id, title: 'Work', author: 'Author' });
+
+    const result = await service.getClub(club.id, 'outsider-1');
+
+    expect(result).toEqual(expect.objectContaining({ currentMembershipRole: null }));
+    expect(memberRepository.findOne).toHaveBeenCalledTimes(1);
+    expect(memberRepository.findOne).toHaveBeenCalledWith({ where: { clubId: club.id, userId: 'outsider-1' } });
+  });
+
   it('returns not found before looking up a target member in a private club', async () => {
     const club = {
       id: 'private-club',

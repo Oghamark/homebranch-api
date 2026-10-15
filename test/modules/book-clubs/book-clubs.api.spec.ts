@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { BookClubsController } from 'src/modules/book-clubs/book-clubs.controller';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
+import { BookClubDiscussionService } from 'src/modules/book-clubs/book-club-discussion.service';
 
 class HeaderUserGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
@@ -47,7 +48,10 @@ describe('BookClubsController API', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [BookClubsController],
-      providers: [{ provide: BookClubsService, useValue: service }],
+      providers: [
+        { provide: BookClubsService, useValue: service },
+        { provide: BookClubDiscussionService, useValue: {} },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useClass(HeaderUserGuard)
@@ -122,6 +126,20 @@ describe('BookClubsController API', () => {
 
     expect(response.status).toBe(201);
     expect(service.joinClub).toHaveBeenCalledWith('123e4567-e89b-42d3-a456-426614174002', 'reader-2');
+  });
+
+  it('returns the caller-specific membership role from a club read', async () => {
+    const clubId = '123e4567-e89b-42d3-a456-426614174002';
+    service.getClub.mockResolvedValue({ id: clubId, currentMembershipRole: 'moderator' });
+
+    const response = await fetch(`${baseUrl}/book-clubs/${clubId}`, {
+      headers: { 'x-test-user': 'moderator-1' },
+    });
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual(expect.objectContaining({ currentMembershipRole: 'moderator' }));
+    expect(service.getClub).toHaveBeenCalledWith(clubId, 'moderator-1');
   });
 
   it('does not expose the reserved personal-copy association from membership responses', async () => {

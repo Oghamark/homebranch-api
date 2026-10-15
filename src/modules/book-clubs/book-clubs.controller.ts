@@ -5,10 +5,12 @@ import {
   Get,
   HttpCode,
   Param,
+  ParseEnumPipe,
   ParseUUIDPipe,
   Patch,
   Post,
   Put,
+  Query,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -28,12 +30,19 @@ import { SetBookClubMilestoneMappingDto } from 'src/modules/book-clubs/dto/set-b
 import { SetBookClubProgressSharingDto } from 'src/modules/book-clubs/dto/set-book-club-progress-sharing.dto';
 import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
+import { BookClubDiscussionService, ModerationAction } from 'src/modules/book-clubs/book-club-discussion.service';
+import { CreateBookClubDiscussionThreadDto } from 'src/modules/book-clubs/dto/create-book-club-discussion-thread.dto';
+import { CreateBookClubDiscussionReplyDto } from 'src/modules/book-clubs/dto/create-book-club-discussion-reply.dto';
+import { UpdateBookClubDiscussionDto } from 'src/modules/book-clubs/dto/update-book-club-discussion.dto';
 
 @Controller('book-clubs')
 @UseGuards(JwtAuthGuard)
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 export class BookClubsController {
-  constructor(private readonly bookClubsService: BookClubsService) {}
+  constructor(
+    private readonly bookClubsService: BookClubsService,
+    private readonly discussions: BookClubDiscussionService,
+  ) {}
 
   @Get()
   listClubs(@CurrentUser() currentUser: Express.User) {
@@ -49,6 +58,112 @@ export class BookClubsController {
   async joinClub(@CurrentUser() currentUser: Express.User, @Param('clubId', ParseUUIDPipe) clubId: string) {
     const membership = await this.bookClubsService.joinClub(clubId, currentUser.id);
     return this.membershipResponse(membership);
+  }
+
+  @Get(':clubId/discussions')
+  listDiscussions(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Query('revealSpoilers') reveal?: string,
+  ) {
+    return this.discussions.listThreads(clubId, user.id, reveal === 'true');
+  }
+
+  @Get(':clubId/discussion-recovery-targets')
+  listDiscussionRecoveryTargets(@CurrentUser() user: Express.User, @Param('clubId', ParseUUIDPipe) clubId: string) {
+    return this.discussions.listRecoveryTargets(clubId, user.id);
+  }
+
+  @Post(':clubId/discussions')
+  createDiscussion(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Body() dto: CreateBookClubDiscussionThreadDto,
+  ) {
+    return this.discussions.createThread(clubId, user.id, dto);
+  }
+
+  @Patch(':clubId/discussions/:threadId')
+  editDiscussion(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('threadId', ParseUUIDPipe) threadId: string,
+    @Body() dto: UpdateBookClubDiscussionDto,
+  ) {
+    return this.discussions.editThread(clubId, threadId, user.id, dto);
+  }
+
+  @Delete(':clubId/discussions/:threadId')
+  @HttpCode(204)
+  deleteDiscussion(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('threadId', ParseUUIDPipe) threadId: string,
+  ) {
+    return this.discussions.deleteOwnThread(clubId, threadId, user.id);
+  }
+
+  @Get(':clubId/discussions/:threadId/replies')
+  listDiscussionReplies(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('threadId', ParseUUIDPipe) threadId: string,
+    @Query('revealSpoilers') reveal?: string,
+  ) {
+    return this.discussions.listReplies(clubId, threadId, user.id, reveal === 'true');
+  }
+  @Post(':clubId/discussions/:threadId/replies')
+  createDiscussionReply(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('threadId', ParseUUIDPipe) threadId: string,
+    @Body() dto: CreateBookClubDiscussionReplyDto,
+  ) {
+    return this.discussions.createReply(clubId, threadId, user.id, dto);
+  }
+  @Patch(':clubId/discussion-replies/:replyId')
+  editDiscussionReply(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('replyId', ParseUUIDPipe) replyId: string,
+    @Body() dto: CreateBookClubDiscussionReplyDto,
+  ) {
+    return this.discussions.editReply(clubId, replyId, user.id, dto);
+  }
+  @Delete(':clubId/discussion-replies/:replyId')
+  @HttpCode(204)
+  deleteDiscussionReply(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('replyId', ParseUUIDPipe) replyId: string,
+  ) {
+    return this.discussions.deleteOwnReply(clubId, replyId, user.id);
+  }
+
+  @Post(':clubId/discussions/:threadId/moderation/:action')
+  @HttpCode(204)
+  moderateDiscussion(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('threadId', ParseUUIDPipe) threadId: string,
+    @Param('action', new ParseEnumPipe(ModerationAction)) action: ModerationAction,
+  ) {
+    return this.discussions.moderateThread(clubId, threadId, user.id, action);
+  }
+  @Post(':clubId/discussion-replies/:replyId/moderation/:action')
+  @HttpCode(204)
+  moderateDiscussionReply(
+    @CurrentUser() user: Express.User,
+    @Param('clubId', ParseUUIDPipe) clubId: string,
+    @Param('replyId', ParseUUIDPipe) replyId: string,
+    @Param('action', new ParseEnumPipe(ModerationAction))
+    action: Exclude<ModerationAction, 'lock' | 'unlock' | 'pin' | 'unpin'>,
+  ) {
+    return this.discussions.moderateReply(clubId, replyId, user.id, action);
+  }
+  @Get(':clubId/discussion-audit')
+  discussionAudit(@CurrentUser() user: Express.User, @Param('clubId', ParseUUIDPipe) clubId: string) {
+    return this.discussions.getAudit(clubId, user.id);
   }
 
   @Get(':clubId')
