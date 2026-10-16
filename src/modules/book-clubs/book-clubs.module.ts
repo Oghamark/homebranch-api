@@ -15,9 +15,11 @@ import { BookClubModerationAuditEntity } from 'src/modules/book-clubs/entities/b
 import { BookClubsController } from 'src/modules/book-clubs/book-clubs.controller';
 import { BookClubDiscussionService } from 'src/modules/book-clubs/book-club-discussion.service';
 import { BookClubsService } from 'src/modules/book-clubs/book-clubs.service';
+import { SocialModule } from 'src/modules/social/social.module';
 
 @Module({
   imports: [
+    SocialModule,
     TypeOrmModule.forFeature([
       BookClubEntity,
       BookClubMemberEntity,

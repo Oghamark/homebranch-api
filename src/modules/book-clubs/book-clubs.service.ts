@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  GoneException,
   Inject,
   Injectable,
   NotFoundException,
@@ -35,6 +36,7 @@ import {
 } from 'src/modules/book-clubs/book-club.types';
 import { BookService } from 'src/modules/book/catalog/book.service';
 import { matchBookClubWork } from 'src/modules/book-clubs/book-club-work-matcher';
+import { SocialService } from 'src/modules/social/social.service';
 
 export interface BookClubWorkInput {
   title: string;
@@ -112,6 +114,7 @@ export class BookClubsService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     @Optional() @Inject(BookService) private readonly bookService?: BookService,
+    @Optional() private readonly social?: SocialService,
   ) {}
 
   async setReadingCopy(
@@ -647,6 +650,7 @@ export class BookClubsService {
       if (actor.role !== BookClubRole.OWNER && actor.role !== BookClubRole.MODERATOR) {
         throw new ForbiddenException('Club schedule management permission required');
       }
+      const previousSchedule = await this.social?.scheduleSnapshot(manager, clubId, preserveIds);
 
       const startDate = input.startDate === undefined ? (club.startDate ?? null) : input.startDate;
       const completionDate = input.completionDate === undefined ? (club.completionDate ?? null) : input.completionDate;
@@ -733,6 +737,9 @@ export class BookClubsService {
         });
       }
 
+      if (this.social && previousSchedule !== (await this.social.scheduleSnapshot(manager, clubId, preserveIds))) {
+        await this.social.activity(manager, clubId, userId, 'club_reading_plan', randomUUID());
+      }
       return {
         clubId,
         startDate: club.startDate ?? null,
@@ -836,14 +843,15 @@ export class BookClubsService {
   async joinClub(clubId: string, userId: string): Promise<BookClubMemberEntity> {
     return this.dataSource.transaction(async (manager) => {
       const memberRepository = manager.getRepository(BookClubMemberEntity);
-      const { club, actor } = await this.getVisibleClub(manager, clubId, userId);
+      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
       if (club.status !== BookClubStatus.ACTIVE) {
         throw new ForbiddenException('Archived book clubs cannot be joined');
       }
       if (club.visibility !== BookClubVisibility.INSTANCE_VISIBLE) {
-        throw new ForbiddenException('Private clubs require owner-managed membership');
+        throw new ForbiddenException('Private clubs require an accepted invitation');
       }
       if (actor) throw new ConflictException('User is already a member of this book club');
+      await this.social?.resolveJoin(manager, clubId, userId);
       return memberRepository.save(memberRepository.create({ clubId, userId, role: BookClubRole.MEMBER }));
     });
   }
@@ -929,6 +937,7 @@ export class BookClubsService {
         throw new ForbiddenException('Only the club owner can perform this action');
       }
       club.status = BookClubStatus.ARCHIVED;
+      await this.social?.cancelInvitations(manager, clubId);
       return clubRepository.save(club);
     });
   }
@@ -952,6 +961,7 @@ export class BookClubsService {
       const member = await memberRepository.findOne({ where: { clubId, userId: targetUserId } });
       if (!member || member.role === BookClubRole.OWNER) throw new NotFoundException('Book club member not found');
       member.role = role;
+      if (role === BookClubRole.MEMBER) await this.social?.cancelInvitations(manager, clubId, targetUserId);
       return memberRepository.save(member);
     });
   }
@@ -977,6 +987,7 @@ export class BookClubsService {
         throw new ForbiddenException('Moderators can only remove members');
       }
       await memberRepository.delete({ clubId, userId: targetUserId });
+      await this.social?.cancelInvitations(manager, clubId, targetUserId);
     });
   }
 
@@ -997,6 +1008,7 @@ export class BookClubsService {
       if (nextOwner.role === BookClubRole.OWNER) throw new ConflictException('Book club already has this owner');
 
       actor.role = BookClubRole.MEMBER;
+      await this.social?.cancelInvitations(manager, clubId, actorUserId);
       nextOwner.role = BookClubRole.OWNER;
       club.ownerUserId = newOwnerUserId;
       await memberRepository.save(actor);
@@ -1005,28 +1017,9 @@ export class BookClubsService {
     });
   }
 
-  async addMember(clubId: string, actorUserId: string, input: AddBookClubMemberInput): Promise<BookClubMemberEntity> {
-    return this.dataSource.transaction(async (manager) => {
-      const memberRepository = manager.getRepository(BookClubMemberEntity);
-      const { club, actor } = await this.getVisibleClub(manager, clubId, actorUserId, true);
-      if (club.status !== BookClubStatus.ACTIVE) {
-        throw new ForbiddenException('Archived book clubs cannot be changed');
-      }
-      if (!actor || (actor.role !== BookClubRole.OWNER && actor.role !== BookClubRole.MODERATOR)) {
-        throw new ForbiddenException('Club membership management permission required');
-      }
-
-      const role = input.role ?? BookClubRole.MEMBER;
-      if (role === BookClubRole.OWNER) throw new ForbiddenException('Use ownership transfer to change the owner');
-      if (role === BookClubRole.MODERATOR && actor.role !== BookClubRole.OWNER) {
-        throw new ForbiddenException('Only the club owner can appoint moderators');
-      }
-      if (await memberRepository.findOne({ where: { clubId, userId: input.userId } })) {
-        throw new ConflictException('User is already a member of this book club');
-      }
-
-      return memberRepository.save(memberRepository.create({ clubId, userId: input.userId, role }));
-    });
+  addMember(clubId: string, actorUserId: string, input: AddBookClubMemberInput): Promise<BookClubMemberEntity>;
+  addMember(): Promise<BookClubMemberEntity> {
+    return Promise.reject(new GoneException('Direct member addition has retired. Send a club invitation instead.'));
   }
 
   async updateClub(clubId: string, userId: string, input: UpdateBookClubInput): Promise<BookClubEntity> {
@@ -1040,6 +1033,9 @@ export class BookClubsService {
         throw new ForbiddenException('Archived book clubs cannot be changed');
       }
 
+      const previousSchedule = input.selectedWork
+        ? await this.social?.scheduleSnapshot(manager, clubId, true)
+        : undefined;
       club.name = input.name ?? club.name;
       if (input.description !== undefined) club.description = input.description;
       club.visibility = input.visibility ?? club.visibility;
@@ -1079,6 +1075,13 @@ export class BookClubsService {
           );
         }
       }
+      if (
+        this.social &&
+        previousSchedule !== undefined &&
+        previousSchedule !== (await this.social.scheduleSnapshot(manager, clubId, true))
+      ) {
+        await this.social.activity(manager, clubId, userId, 'club_reading_plan', randomUUID());
+      }
       return club;
     });
   }
@@ -1086,9 +1089,7 @@ export class BookClubsService {
   async listMembers(clubId: string, userId: string): Promise<Array<{ userId: string; role: BookClubRole }>> {
     return this.dataSource.transaction(async (manager) => {
       const { actor } = await this.getVisibleClub(manager, clubId, userId, true);
-      if (!actor || (actor.role !== BookClubRole.OWNER && actor.role !== BookClubRole.MODERATOR)) {
-        throw new ForbiddenException('Club membership management permission required');
-      }
+      if (!actor) throw new ForbiddenException('Book club membership required');
       const members = await manager.getRepository(BookClubMemberEntity).find({
         select: { userId: true, role: true },
         where: { clubId },
@@ -1180,6 +1181,7 @@ export class BookClubsService {
     actorUserId: string,
     lockClub = false,
   ): Promise<{ club: BookClubEntity; actor?: BookClubMemberEntity | null }> {
+    if (lockClub) await this.social?.lock(manager);
     const clubRepository = manager.getRepository(BookClubEntity);
     const club = await clubRepository.findOne({
       where: { id: clubId },

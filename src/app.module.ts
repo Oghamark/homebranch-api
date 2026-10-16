@@ -22,6 +22,7 @@ import { MailModule } from 'src/modules/mail/mail.module';
 import { KindleModule } from 'src/modules/kindle/kindle.module';
 import { BookClubsModule } from 'src/modules/book-clubs/book-clubs.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
+import { SocialModule } from './modules/social/social.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
     MailModule,
     KindleModule,
     BookClubsModule,
+    SocialModule,
   ],
   controllers: [],
   providers: [

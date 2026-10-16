@@ -563,18 +563,20 @@ describe('BookClubsController API', () => {
     expect(service.clearReadingCopy).not.toHaveBeenCalled();
   });
 
-  it('rejects non-UUID add-member and ownership-transfer target IDs at the API boundary', async () => {
+  it('retires direct additions and still validates ownership-transfer target IDs', async () => {
     const clubId = '123e4567-e89b-42d3-a456-426614174000';
     const requests = [
       {
         method: 'POST',
         path: `/book-clubs/${clubId}/members`,
         body: { userId: 'not-a-uuid' },
+        status: 410,
       },
       {
         method: 'POST',
         path: `/book-clubs/${clubId}/transfer-ownership`,
         body: { newOwnerUserId: 'not-a-uuid' },
+        status: 400,
       },
     ];
 
@@ -584,7 +586,7 @@ describe('BookClubsController API', () => {
         headers: { 'content-type': 'application/json', 'x-test-user': clubId },
         body: JSON.stringify(request.body),
       });
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(request.status);
     }
 
     expect(service.addMember).not.toHaveBeenCalled();

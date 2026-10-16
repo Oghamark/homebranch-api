@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  GoneException,
   HttpCode,
   Param,
   ParseEnumPipe,
@@ -17,7 +18,6 @@ import {
 } from '@nestjs/common';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
-import { AddBookClubMemberDto } from 'src/modules/book-clubs/dto/add-book-club-member.dto';
 import { CreateBookClubDto } from 'src/modules/book-clubs/dto/create-book-club.dto';
 import { TransferBookClubOwnershipDto } from 'src/modules/book-clubs/dto/transfer-book-club-ownership.dto';
 import { UpdateBookClubMemberDto } from 'src/modules/book-clubs/dto/update-book-club-member.dto';
@@ -322,13 +322,8 @@ export class BookClubsController {
   }
 
   @Post(':clubId/members')
-  async addMember(
-    @CurrentUser() currentUser: Express.User,
-    @Param('clubId', ParseUUIDPipe) clubId: string,
-    @Body() dto: AddBookClubMemberDto,
-  ) {
-    const membership = await this.bookClubsService.addMember(clubId, currentUser.id, dto);
-    return this.membershipResponse(membership);
+  addMember(@Param('clubId', ParseUUIDPipe) clubId: string) {
+    throw new GoneException(`Direct member addition has retired. Use /book-clubs/${clubId}/invitations instead.`);
   }
 
   @Patch(':clubId/members/:userId')

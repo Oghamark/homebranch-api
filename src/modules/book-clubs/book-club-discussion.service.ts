@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
@@ -7,6 +7,7 @@ import { BookClubDiscussionThreadEntity } from 'src/modules/book-clubs/entities/
 import { BookClubDiscussionReplyEntity } from 'src/modules/book-clubs/entities/book-club-discussion-reply.entity';
 import { BookClubModerationAuditEntity } from 'src/modules/book-clubs/entities/book-club-moderation-audit.entity';
 import { BookClubRole, BookClubStatus, BookClubVisibility } from 'src/modules/book-clubs/book-club.types';
+import { SocialService } from 'src/modules/social/social.service';
 
 export const ModerationAction = {
   LOCK: 'lock',
@@ -32,7 +33,10 @@ type RecoveryTarget = {
 
 @Injectable()
 export class BookClubDiscussionService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    @Optional() private readonly social?: SocialService,
+  ) {}
 
   async listThreads(clubId: string, userId: string, revealSpoilers = false) {
     return this.dataSource.transaction(async (manager) => {
@@ -84,6 +88,7 @@ export class BookClubDiscussionService {
           deleted: false,
         }),
       );
+      await this.social?.activity(manager, clubId, userId, 'club_discussion', thread.id, thread.id);
       return this.threadResponse(thread, false);
     });
   }
@@ -140,6 +145,7 @@ export class BookClubDiscussionService {
           deleted: false,
         }),
       );
+      await this.social?.activity(manager, clubId, userId, 'club_reply', reply.id, threadId, reply.id);
       return this.replyResponse(reply, false);
     });
   }
@@ -256,6 +262,7 @@ export class BookClubDiscussionService {
   }
 
   private async member(manager: EntityManager, clubId: string, userId: string, lock = false, allowArchived = false) {
+    if (lock) await this.social?.lock(manager);
     const club = await manager
       .getRepository(BookClubEntity)
       .findOne({ where: { id: clubId }, ...(lock ? { lock: { mode: 'pessimistic_write' as const } } : {}) });

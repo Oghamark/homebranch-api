@@ -68,69 +68,89 @@ describe('BookClubsService', () => {
     service = new BookClubsService(dataSource);
   });
 
-  it('returns only user IDs and club roles to owners and moderators', async () => {
-    const club = {
-      id: 'club-1',
-      visibility: BookClubVisibility.PRIVATE,
-      status: BookClubStatus.ACTIVE,
-    };
-    clubRepository.findOne.mockResolvedValue(club);
-    memberRepository.findOne.mockResolvedValue({
-      clubId: club.id,
-      userId: 'moderator-1',
-      role: BookClubRole.MODERATOR,
-    });
-    memberRepository.find.mockResolvedValue([
-      { userId: 'owner-1', role: BookClubRole.OWNER, personalBookId: 'private-book', progressSharingEnabled: true },
-      {
-        userId: 'member-1',
-        role: BookClubRole.MEMBER,
-        personalBookId: 'another-private-book',
-        progressSharingEnabled: false,
-      },
-    ]);
+  it.each([BookClubRole.OWNER, BookClubRole.MODERATOR, BookClubRole.MEMBER])(
+    'returns only user IDs and club roles to a club %s',
+    async (role) => {
+      const club = {
+        id: 'club-1',
+        visibility: BookClubVisibility.PRIVATE,
+        status: BookClubStatus.ACTIVE,
+      };
+      clubRepository.findOne.mockResolvedValue(club);
+      memberRepository.findOne.mockResolvedValue({
+        clubId: club.id,
+        userId: 'moderator-1',
+        role,
+      });
+      memberRepository.find.mockResolvedValue([
+        { userId: 'owner-1', role: BookClubRole.OWNER, personalBookId: 'private-book', progressSharingEnabled: true },
+        {
+          userId: 'member-1',
+          role: BookClubRole.MEMBER,
+          personalBookId: 'another-private-book',
+          progressSharingEnabled: false,
+        },
+      ]);
 
-    const roster = await service.listMembers(club.id, 'moderator-1');
+      const roster = await service.listMembers(club.id, 'moderator-1');
 
-    expect(roster).toEqual([
-      { userId: 'owner-1', role: BookClubRole.OWNER },
-      { userId: 'member-1', role: BookClubRole.MEMBER },
-    ]);
-    expect(memberRepository.find).toHaveBeenCalledWith({
-      select: { userId: true, role: true },
-      where: { clubId: club.id },
-      order: { createdAt: 'ASC', id: 'ASC' },
-    });
-  });
+      expect(roster).toEqual([
+        { userId: 'owner-1', role: BookClubRole.OWNER },
+        { userId: 'member-1', role: BookClubRole.MEMBER },
+      ]);
+      expect(memberRepository.find).toHaveBeenCalledWith({
+        select: { userId: true, role: true },
+        where: { clubId: club.id },
+        order: { createdAt: 'ASC', id: 'ASC' },
+      });
+    },
+  );
 
-  it('serializes roster access behind a concurrent manager role change', async () => {
+  it('serializes roster access behind concurrent membership revocation', async () => {
     const club = { id: 'club-1', visibility: BookClubVisibility.PRIVATE, status: BookClubStatus.ACTIVE };
-    let actorRole = BookClubRole.MODERATOR;
+    let revoked = false;
     clubRepository.findOne.mockImplementation((options: unknown) => {
       if ((options as { lock?: { mode: string } }).lock?.mode === 'pessimistic_write') {
-        actorRole = BookClubRole.MEMBER;
+        revoked = true;
       }
       return Promise.resolve(club);
     });
     memberRepository.findOne.mockImplementation(() =>
-      Promise.resolve({ clubId: club.id, userId: 'moderator-1', role: actorRole }),
+      Promise.resolve(revoked ? undefined : { clubId: club.id, userId: 'moderator-1', role: BookClubRole.MODERATOR }),
     );
 
-    await expect(service.listMembers(club.id, 'moderator-1')).rejects.toMatchObject({ status: 403 });
+    await expect(service.listMembers(club.id, 'moderator-1')).rejects.toMatchObject({ status: 404 });
     expect(memberRepository.find).not.toHaveBeenCalled();
   });
 
-  it('rejects visible-club members who do not manage membership without reading the roster', async () => {
+  it('rejects visible-club non-members without reading the roster', async () => {
     const club = {
       id: 'club-1',
       visibility: BookClubVisibility.INSTANCE_VISIBLE,
       status: BookClubStatus.ACTIVE,
     };
     clubRepository.findOne.mockResolvedValue(club);
-    memberRepository.findOne.mockResolvedValue({ clubId: club.id, userId: 'member-1', role: BookClubRole.MEMBER });
-
-    await expect(service.listMembers(club.id, 'member-1')).rejects.toMatchObject({ status: 403 });
+    await expect(service.listMembers(club.id, 'outsider')).rejects.toMatchObject({ status: 403 });
     expect(memberRepository.find).not.toHaveBeenCalled();
+  });
+
+  it('allows an ordinary member to read an archived club roster without granting management permissions', async () => {
+    clubRepository.findOne.mockResolvedValue({
+      id: 'club-1',
+      visibility: BookClubVisibility.PRIVATE,
+      status: BookClubStatus.ARCHIVED,
+    });
+    memberRepository.findOne.mockResolvedValue({
+      clubId: 'club-1',
+      userId: 'reader',
+      role: BookClubRole.MEMBER,
+    });
+    memberRepository.find.mockResolvedValue([{ userId: 'reader', role: BookClubRole.MEMBER }]);
+    await expect(service.listMembers('club-1', 'reader')).resolves.toEqual([
+      { userId: 'reader', role: BookClubRole.MEMBER },
+    ]);
+    expect(memberRepository.save).not.toHaveBeenCalled();
+    expect(memberRepository.delete).not.toHaveBeenCalled();
   });
 
   it('keeps logical selected work separate from a future per-member personal-copy reference', () => {
@@ -444,11 +464,11 @@ describe('BookClubsService', () => {
 
     await expect(
       service.addMember('club-1', 'owner-1', { userId: 'new-moderator', role: BookClubRole.MODERATOR }),
-    ).rejects.toThrow('Club membership management permission required');
+    ).rejects.toThrow('Direct member addition has retired');
     expect(memberRepository.save).not.toHaveBeenCalled();
   });
 
-  it('lets owners appoint a moderator while a moderator cannot grant another moderator role', async () => {
+  it('retires direct additions for owners and moderators without creating memberships', async () => {
     clubRepository.findOne.mockResolvedValue({
       id: 'club-1',
       ownerUserId: 'owner-1',
@@ -459,17 +479,17 @@ describe('BookClubsService', () => {
       .mockResolvedValueOnce({ clubId: 'club-1', userId: 'owner-1', role: 'owner' })
       .mockResolvedValueOnce(undefined);
 
-    await service.addMember('club-1', 'owner-1', { userId: 'moderator-2', role: BookClubRole.MODERATOR });
-    expect(memberRepository.save).toHaveBeenCalledWith(
-      expect.objectContaining({ clubId: 'club-1', userId: 'moderator-2', role: BookClubRole.MODERATOR }),
-    );
+    await expect(
+      service.addMember('club-1', 'owner-1', { userId: 'moderator-2', role: BookClubRole.MODERATOR }),
+    ).rejects.toMatchObject({ status: 410 });
+    expect(memberRepository.save).not.toHaveBeenCalled();
 
     memberRepository.findOne
       .mockResolvedValueOnce({ clubId: 'club-1', userId: 'moderator-1', role: BookClubRole.MODERATOR })
       .mockResolvedValueOnce(undefined);
     await expect(
       service.addMember('club-1', 'moderator-1', { userId: 'moderator-3', role: BookClubRole.MODERATOR }),
-    ).rejects.toThrow('Only the club owner can appoint moderators');
+    ).rejects.toMatchObject({ status: 410 });
   });
 
   it('allows the owner to update club settings but not a moderator', async () => {
@@ -595,7 +615,6 @@ describe('BookClubsService', () => {
       () => service.getClub(club.id, 'outsider'),
       () => service.updateClub(club.id, 'outsider', { name: 'Changed' }),
       () => service.listMembers(club.id, 'outsider'),
-      () => service.addMember(club.id, 'outsider', { userId: targetUserId }),
       () => service.updateMemberRole(club.id, 'outsider', targetUserId, BookClubRole.MODERATOR),
       () => service.removeMember(club.id, 'outsider', targetUserId),
       () => service.transferOwnership(club.id, 'outsider', targetUserId),
