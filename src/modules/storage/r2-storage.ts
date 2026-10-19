@@ -224,6 +224,7 @@ export class R2Storage implements IStorageService {
       return {
         size: response.ContentLength ?? 0,
         mtimeMs: response.LastModified.getTime(),
+        etag: response.ETag,
       };
     } catch (error) {
       if (error instanceof S3ServiceException && error.name === 'NotFound') {

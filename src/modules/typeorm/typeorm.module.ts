@@ -52,6 +52,9 @@ import { BookClubDiscussionReplyEntity } from 'src/modules/book-clubs/entities/b
 import { BookClubModerationAuditEntity } from 'src/modules/book-clubs/entities/book-club-moderation-audit.entity';
 import { SOCIAL_ENTITIES } from 'src/modules/social/social.entity';
 import { CreateSocial1790000000010 } from 'src/migrations/1790000000010-CreateSocial';
+import { KOREADER_ENTITIES } from '../koreader/koreader.entity';
+import { CreateKoreader1790000000011 } from 'src/migrations/1790000000011-CreateKoreader';
+import { KoreaderVerifiedContent1790000000012 } from 'src/migrations/1790000000012-KoreaderVerifiedContent';
 
 @Module({
   imports: [
@@ -81,6 +84,7 @@ import { CreateSocial1790000000010 } from 'src/migrations/1790000000010-CreateSo
           password: password,
           database: database,
           entities: [
+            ...KOREADER_ENTITIES,
             ...SOCIAL_ENTITIES,
             BookEntity,
             BookFormatEntity,
@@ -103,6 +107,8 @@ import { CreateSocial1790000000010 } from 'src/migrations/1790000000010-CreateSo
             BookClubModerationAuditEntity,
           ],
           migrations: [
+            KoreaderVerifiedContent1790000000012,
+            CreateKoreader1790000000011,
             CreateSocial1790000000010,
             SchemaUpdate1755566512418,
             AddUserAndRoleTables1739836800000,

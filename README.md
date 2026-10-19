@@ -76,6 +76,12 @@ Authentication uses HTTP Basic Auth (email + password). Credentials are forwarde
 
 > **Windows / Docker note:** If Thorium is installed from the Microsoft Store, it runs in an AppContainer sandbox that blocks access to `localhost`. Use your machine's LAN IP address (e.g. `http://192.168.1.x:3000/opds/v1/catalog`) instead.
 
+## KOReader sync
+
+The `/koreader` integration provides browser-approved device pairing, native progress compatibility, an EPUB percentage bridge, and private exact-quote annotations. It uses revocable sync-only device keys, not Homebranch passwords. OPDS downloads remain separate.
+
+See [KOReader API and deployment](docs/koreader-api.md) for endpoint contracts, HTTPS requirements, migration details, approximate-position semantics, unresolved selectors, and credential lifecycle limitations.
+
 ## Contributing
 
 Contributions are welcome! See the [Homebranch contribution guidelines](https://github.com/Oghamark/homebranch/blob/dev/CONTRIBUTING.md) for the project contribution process and integrated development setup.

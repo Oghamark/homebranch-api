@@ -11,12 +11,20 @@ describe('SavedPositionService.delete', () => {
   let repository: Mocked<Repository<SavedPositionEntity>>;
 
   beforeEach(async () => {
+    const manager = {
+      transaction: jest.fn((work: (value: unknown) => Promise<unknown>) => work(manager)),
+      getRepository: () => repository,
+      query: jest.fn((sql: string) =>
+        Promise.resolve(sql.includes('SET revision=revision+1') ? [[{ revision: '1' }], 1] : [{ revision: '1' }]),
+      ),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SavedPositionService,
         {
           provide: getRepositoryToken(SavedPositionEntity),
           useValue: {
+            manager,
             delete: jest.fn(),
           },
         },

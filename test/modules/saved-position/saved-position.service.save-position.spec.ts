@@ -9,14 +9,26 @@ import Mocked = jest.Mocked;
 describe('SavedPositionService.save', () => {
   let service: SavedPositionService;
   let repository: Mocked<Repository<SavedPositionEntity>>;
+  let query: jest.Mock;
 
   beforeEach(async () => {
+    query = jest.fn((sql: string) =>
+      Promise.resolve(
+        sql.includes('SET revision=revision+1') ? [[{ revision: '1' }], 1] : [{ revision: '1', id: 'epub-format' }],
+      ),
+    );
+    const manager = {
+      transaction: jest.fn((work: (value: unknown) => Promise<unknown>) => work(manager)),
+      getRepository: () => repository,
+      query,
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SavedPositionService,
         {
           provide: getRepositoryToken(SavedPositionEntity),
           useValue: {
+            manager,
             save: jest.fn(),
             findOne: jest.fn(),
           },
@@ -53,6 +65,8 @@ describe('SavedPositionService.save', () => {
       percentage: 0.42,
     });
     expect(result).toEqual(mockSavedPosition);
+    expect(query.mock.calls.some(([sql]) => sql.includes('FOR UPDATE'))).toBe(true);
+    expect(query.mock.calls.some(([sql]) => sql.includes("VALUES($1,$2,$3,'web'"))).toBe(true);
   });
 
   test('Successfully saves a position without percentage (backwards compatibility)', async () => {

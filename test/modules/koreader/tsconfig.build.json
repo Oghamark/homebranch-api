@@ -1,0 +1,9 @@
+{
+  "extends": "../../../tsconfig.build.json",
+  "compilerOptions": {
+    "outDir": "../../../.koreader-validation-dist",
+    "tsBuildInfoFile": "../../../.koreader-validation-dist/build.tsbuildinfo"
+  },
+  "include": ["../../../src/**/*.ts"],
+  "exclude": ["../../../src/**/*.spec.ts"]
+}

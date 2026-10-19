@@ -23,6 +23,7 @@ import { KindleModule } from 'src/modules/kindle/kindle.module';
 import { BookClubsModule } from 'src/modules/book-clubs/book-clubs.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { SocialModule } from './modules/social/social.module';
+import { KoreaderModule } from './modules/koreader/koreader.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { SocialModule } from './modules/social/social.module';
     KindleModule,
     BookClubsModule,
     SocialModule,
+    KoreaderModule,
   ],
   controllers: [],
   providers: [

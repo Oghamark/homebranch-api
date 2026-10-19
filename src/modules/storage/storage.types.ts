@@ -38,4 +38,5 @@ export interface FileBufferResult {
 export interface StorageFileStats {
   size: number;
   mtimeMs: number;
+  etag?: string;
 }
