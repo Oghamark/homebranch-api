@@ -5,6 +5,7 @@ import { KoreaderDocumentService } from './koreader-document.service';
 import { nextSyncRevision } from './koreader-ordering';
 import { annotationInput, documentId, fraction, identifier, object, text } from './koreader-validation';
 import { QuoteAnchor } from './koreader.entity';
+import { parsePortableLocation, PortableLocation } from '../book/publication/epub-location';
 
 interface AnnotationRow {
   id: string;
@@ -28,6 +29,17 @@ export interface NativePayload {
 }
 
 type NativeAcknowledgement = Pick<NativePayload, 'document' | 'timestamp'>;
+
+interface SharedProgress {
+  percentage: number;
+  source: 'web' | 'koreader';
+  accuracy: 'exact' | 'approximate';
+  device: string;
+  revision: string;
+  updatedAt: string;
+  nativeProgress?: string;
+  location?: PortableLocation;
+}
 
 function publicAnnotation(row: AnnotationRow) {
   return {
@@ -98,12 +110,21 @@ export class KoreaderService {
     const device = text(body.device, 128);
     const deviceId = body.device_id === undefined ? undefined : text(body.device_id, 128);
     const mutationId = body.mutationId === undefined ? undefined : identifier(body.mutationId);
-    const requestHash = verifier(JSON.stringify(['native-progress', document, progress, percentage, device, deviceId]));
+    const location = body.location === undefined ? undefined : parsePortableLocation(body.location);
+    const hashFields: unknown[] = ['native-progress', document, progress, percentage, device, deviceId];
+    if (location !== undefined) hashFields.push(location);
+    const requestHash = verifier(JSON.stringify(hashFields));
     return this.db.transaction(async (manager) => {
       await this.auth.lockActor(manager, actor, true);
       const prior = await this.retry<NativeAcknowledgement>(manager, actor, mutationId, requestHash);
       if (prior) return prior;
       const linked = await this.documents.linked(manager, actor, document);
+      if (location) {
+        if (!linked || linked.formatId !== location.formatId) {
+          throw new BadRequestException('Portable location requires the verified document format');
+        }
+        await this.documents.validateLocation(manager, actor, linked.bookId, location);
+      }
       const revision = await nextSyncRevision(manager, actor.id);
       const timestamp = Math.floor(Date.now() / 1000);
       const payload = {
@@ -121,11 +142,11 @@ export class KoreaderService {
       );
       if (linked) {
         await manager.query(
-          `INSERT INTO koreader_book_progress(user_id,book_id,percentage,source,device,native_progress,revision)
-           VALUES($1,$2,$3,'koreader',$4,$5,$6) ON CONFLICT(user_id,book_id) DO UPDATE
+          `INSERT INTO koreader_book_progress(user_id,book_id,percentage,source,device,native_progress,revision,location)
+           VALUES($1,$2,$3,'koreader',$4,$5,$6,$7) ON CONFLICT(user_id,book_id) DO UPDATE
            SET percentage=EXCLUDED.percentage,source='koreader',device=EXCLUDED.device,
-           native_progress=EXCLUDED.native_progress,revision=EXCLUDED.revision,updated_at=clock_timestamp()`,
-          [actor.id, linked.bookId, percentage, device, progress, revision],
+           native_progress=EXCLUDED.native_progress,location=EXCLUDED.location,revision=EXCLUDED.revision,updated_at=clock_timestamp()`,
+          [actor.id, linked.bookId, percentage, device, progress, revision, location ? JSON.stringify(location) : null],
         );
       }
       const result = { document, timestamp };
@@ -147,7 +168,7 @@ export class KoreaderService {
     });
   }
 
-  async progress(actor: SyncActor, bookId: string) {
+  async progress(actor: SyncActor, bookId: string): Promise<SharedProgress | null> {
     return this.db.transaction(async (manager) => {
       await this.auth.lockActor(manager, actor, false);
       await this.documents.requireBook(manager, actor, bookId);
@@ -159,22 +180,30 @@ export class KoreaderService {
           native_progress: string | null;
           revision: string;
           updated_at: Date;
+          location: PortableLocation | null;
         }[]
       >(
-        `SELECT percentage,source,device,native_progress,revision,updated_at FROM koreader_book_progress
+        `SELECT percentage,source,device,native_progress,revision,updated_at,location FROM koreader_book_progress
          WHERE user_id=$1 AND book_id=$2`,
         [actor.id, bookId],
       );
       if (row) {
         if (row.percentage === null) return null;
+        const hasPortableLocation = row.location !== null && row.location !== undefined;
+        const location = hasPortableLocation
+          ? await this.documents.compatibleLocation(manager, actor, bookId, row.location)
+          : null;
         return {
           percentage: row.percentage,
           source: row.source,
           accuracy: row.source === 'web' && !actor.deviceId ? 'exact' : 'approximate',
-          ...(row.source === 'koreader' && row.native_progress ? { nativeProgress: row.native_progress } : {}),
+          ...(row.source === 'koreader' && row.native_progress && (!hasPortableLocation || location)
+            ? { nativeProgress: row.native_progress }
+            : {}),
           device: row.device,
           revision: row.revision,
           updatedAt: new Date(row.updated_at).toISOString(),
+          ...(location ? { location } : {}),
         };
       }
       const [legacy] = await manager.query<{ percentage: number | null; device_name: string; updated_at: Date }[]>(

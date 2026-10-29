@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { mockSavedPosition } from 'test/mocks/savedPositionMocks';
 import { SavedPositionService } from 'src/modules/saved-position/saved-position.service';
+import { EpubLocationService } from 'src/modules/book/publication/epub-location.service';
 import { SavedPositionEntity } from 'src/modules/saved-position/saved-position.entity';
 import Mocked = jest.Mocked;
 
@@ -21,6 +22,7 @@ describe('SavedPositionService.delete', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SavedPositionService,
+        { provide: EpubLocationService, useValue: {} },
         {
           provide: getRepositoryToken(SavedPositionEntity),
           useValue: {

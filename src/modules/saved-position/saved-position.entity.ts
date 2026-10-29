@@ -1,5 +1,6 @@
 import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 import { BookEntity } from 'src/modules/book/book.entity';
+import { PortableLocation } from '../book/publication/epub-location';
 
 @Entity()
 export class SavedPositionEntity {
@@ -17,6 +18,12 @@ export class SavedPositionEntity {
 
   @Column({ type: 'float', nullable: true, default: null })
   percentage: number | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  location?: PortableLocation | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  revision?: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

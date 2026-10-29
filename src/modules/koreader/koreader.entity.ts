@@ -1,4 +1,5 @@
 import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
+import { PortableLocation } from '../book/publication/epub-location';
 
 @Entity('koreader_device')
 export class KoreaderDevice {
@@ -47,6 +48,7 @@ export class KoreaderBookProgress {
   @Column('varchar') source: string;
   @Column('varchar') device: string;
   @Column('text', { nullable: true }) nativeProgress: string | null;
+  @Column('jsonb', { nullable: true }) location: PortableLocation | null;
   @Column('bigint') revision: string;
   @Column('timestamptz') updatedAt: Date;
 }

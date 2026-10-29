@@ -32,7 +32,11 @@ export class BookPublicationService {
       throw new BadRequestException(`Format "${selectedFormat.format}" does not support manifest generation`);
     }
 
-    return this.manifestService.generateManifest({ ...book, fileName: selectedFormat.fileName }, baseUrl);
+    return this.manifestService.generateManifest(
+      { ...book, fileName: selectedFormat.fileName },
+      baseUrl,
+      selectedFormat.id,
+    );
   }
 
   async getContent(id: string, entryPath: string, format?: BookFormatType): Promise<PublicationContentEntry> {

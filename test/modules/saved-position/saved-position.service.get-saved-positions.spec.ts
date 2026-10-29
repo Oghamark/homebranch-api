@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { mockSavedPosition } from 'test/mocks/savedPositionMocks';
 import { SavedPositionEntity } from 'src/modules/saved-position/saved-position.entity';
 import { SavedPositionService } from 'src/modules/saved-position/saved-position.service';
+import { EpubLocationService } from 'src/modules/book/publication/epub-location.service';
 import Mocked = jest.Mocked;
 
 describe('SavedPositionService.findAllByUser', () => {
@@ -14,6 +15,7 @@ describe('SavedPositionService.findAllByUser', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SavedPositionService,
+        { provide: EpubLocationService, useValue: { compatible: jest.fn() } },
         {
           provide: getRepositoryToken(SavedPositionEntity),
           useValue: {

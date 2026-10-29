@@ -55,6 +55,7 @@ import { CreateSocial1790000000010 } from 'src/migrations/1790000000010-CreateSo
 import { KOREADER_ENTITIES } from '../koreader/koreader.entity';
 import { CreateKoreader1790000000011 } from 'src/migrations/1790000000011-CreateKoreader';
 import { KoreaderVerifiedContent1790000000012 } from 'src/migrations/1790000000012-KoreaderVerifiedContent';
+import { EpubPortableLocation1790000000013 } from 'src/migrations/1790000000013-EpubPortableLocation';
 
 @Module({
   imports: [
@@ -107,6 +108,7 @@ import { KoreaderVerifiedContent1790000000012 } from 'src/migrations/17900000000
             BookClubModerationAuditEntity,
           ],
           migrations: [
+            EpubPortableLocation1790000000013,
             KoreaderVerifiedContent1790000000012,
             CreateKoreader1790000000011,
             CreateSocial1790000000010,

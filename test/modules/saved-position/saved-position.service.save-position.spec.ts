@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { mockSavedPosition } from 'test/mocks/savedPositionMocks';
 import { SavedPositionService } from 'src/modules/saved-position/saved-position.service';
 import { SavedPositionEntity } from 'src/modules/saved-position/saved-position.entity';
+import { EpubLocationService } from 'src/modules/book/publication/epub-location.service';
 import Mocked = jest.Mocked;
 
 describe('SavedPositionService.save', () => {
@@ -25,6 +26,7 @@ describe('SavedPositionService.save', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SavedPositionService,
+        { provide: EpubLocationService, useValue: { validate: jest.fn(), compatible: jest.fn() } },
         {
           provide: getRepositoryToken(SavedPositionEntity),
           useValue: {
@@ -63,6 +65,8 @@ describe('SavedPositionService.save', () => {
       position: mockSavedPosition.position,
       deviceName: mockSavedPosition.deviceName,
       percentage: 0.42,
+      location: null,
+      revision: '1',
     });
     expect(result).toEqual(mockSavedPosition);
     expect(query.mock.calls.some(([sql]) => sql.includes('FOR UPDATE'))).toBe(true);
@@ -83,5 +87,23 @@ describe('SavedPositionService.save', () => {
 
     expect(repository.save).toHaveBeenCalledTimes(1);
     expect(result.percentage).toBeNull();
+  });
+
+  test('preserves ordinary PDF/audio positions when no EPUB format exists', async () => {
+    query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('book_format_entity') ? [] : [{ revision: '1' }]),
+    );
+    repository.findOne.mockResolvedValueOnce(mockSavedPosition);
+    await service.save({
+      bookId: mockSavedPosition.bookId,
+      userId: mockSavedPosition.userId,
+      position: 'audio:120.5',
+      deviceName: 'Web',
+      percentage: 0.2,
+    });
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ position: 'audio:120.5', location: null, revision: null }),
+    );
+    expect(query.mock.calls.some(([sql]) => sql.includes('INSERT INTO koreader_book_progress'))).toBe(false);
   });
 });

@@ -34,6 +34,10 @@ import { STORAGE_SERVICE_TOKEN } from 'src/modules/storage/storage.interface';
 import { StorageByteRange } from 'src/modules/storage/storage.types';
 import { CreateKoreader1790000000011 } from 'src/migrations/1790000000011-CreateKoreader';
 import { KoreaderVerifiedContent1790000000012 } from 'src/migrations/1790000000012-KoreaderVerifiedContent';
+import { EpubPortableLocation1790000000013 } from 'src/migrations/1790000000013-EpubPortableLocation';
+import { EpubLocationService } from 'src/modules/book/publication/epub-location.service';
+import { EpubManifestService } from 'src/modules/book/publication/epub-manifest.service';
+import { EpubArchiveCacheService } from 'src/modules/book/publication/epub-archive-cache.service';
 
 /** Local-only synthetic integration fixture. Never imports or starts the production application. */
 export async function startKoreaderHarness() {
@@ -93,10 +97,15 @@ export async function startKoreaderHarness() {
     try {
       await new CreateKoreader1790000000011().up(runner);
       await new KoreaderVerifiedContent1790000000012().up(runner);
+      await new EpubPortableLocation1790000000013().up(runner);
     } finally {
       await runner.release();
     }
     const storage = {
+      getFileBuffer: async (key: string) => {
+        if (key !== 'books/fixture.epub') throw new NotFoundException();
+        return { buffer: await readFile(fixture) };
+      },
       getFileStats: async (key: string) => {
         if (key !== 'books/fixture.epub') throw new NotFoundException();
         const file = await stat(fixture);
@@ -141,6 +150,9 @@ export async function startKoreaderHarness() {
         KoreaderDocumentService,
         KoreaderService,
         SavedPositionService,
+        EpubLocationService,
+        EpubManifestService,
+        EpubArchiveCacheService,
         { provide: DataSource, useValue: db },
         { provide: EntitlementService, useValue: { cloudMode: false } },
         { provide: BookService, useValue: { assertAccess: () => Promise.resolve() } },

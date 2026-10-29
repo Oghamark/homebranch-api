@@ -6,6 +6,7 @@ import { KoreaderAuthService } from './koreader-auth.service';
 import { KoreaderDeviceGuard, KoreaderSyncGuard } from './koreader.guard';
 import { KoreaderService } from './koreader.service';
 import { KoreaderDocumentService } from './koreader-document.service';
+import { BookPublicationModule } from '../book/publication/book-publication.module';
 import {
   KoreaderExtensionController,
   KoreaderNativeController,
@@ -13,7 +14,7 @@ import {
 } from './koreader.controller';
 
 @Module({
-  imports: [AuthModule, BookCoreModule, StorageModule],
+  imports: [AuthModule, BookCoreModule, StorageModule, BookPublicationModule],
   providers: [KoreaderAuthService, KoreaderDeviceGuard, KoreaderSyncGuard, KoreaderService, KoreaderDocumentService],
   controllers: [KoreaderPairingController, KoreaderNativeController, KoreaderExtensionController],
 })

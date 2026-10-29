@@ -15,6 +15,8 @@ import { KoreaderAuthService, SyncActor, verifier } from './koreader-auth.servic
 import { partialMd5FromStorage } from './partial-md5';
 import { metadataIndependentIdentity } from './epub-identity';
 import { documentId, object, text, uuid } from './koreader-validation';
+import { EpubLocationService } from '../book/publication/epub-location.service';
+import { PortableLocation } from '../book/publication/epub-location';
 
 interface AliasRow {
   user_id: string;
@@ -42,7 +44,38 @@ export class KoreaderDocumentService {
     private readonly books: BookService,
     @Inject(STORAGE_SERVICE_TOKEN) private readonly storage: IStorageService,
     private readonly hashes: ContentHashService,
+    private readonly locations: EpubLocationService,
   ) {}
+
+  validateLocation(manager: EntityManager, actor: SyncActor, bookId: string, value: PortableLocation) {
+    return this.locations.validate(manager, actor.id, bookId, value);
+  }
+
+  compatibleLocation(manager: EntityManager, actor: SyncActor, bookId: string, value: unknown) {
+    return this.locations.compatible(manager, actor.id, bookId, value);
+  }
+
+  async locationMap(actor: SyncActor, bookId: string, formatId: string) {
+    return this.db.transaction(async (manager) => {
+      await this.auth.lockActor(manager, actor, false);
+      const [format] = await manager.query<(FormatRow & { document: string })[]>(
+        `SELECT f.*,a.document FROM koreader_alias a JOIN book_format_entity f ON f.id=a.format_id
+         JOIN book_entity b ON b.id=f.book_id
+         WHERE a.user_id=$1 AND f.book_id=$2 AND f.id=$3 AND f.format='EPUB'
+         AND a.content_hash IS NOT NULL AND b.deleted_at IS NULL
+         AND ($4::varchar IS NULL OR b.uploaded_by_user_id=$4) LIMIT 1`,
+        [actor.id, bookId, formatId, tenantScope(actor) ?? null],
+      );
+      if (!format) throw new NotFoundException('Resolve this EPUB format before requesting its location map');
+      await this.indexFormat(manager, actor, format, format.document);
+      const [verified] = await manager.query<{ format_id: string }[]>(
+        `SELECT format_id FROM koreader_alias WHERE user_id=$1 AND format_id=$2 AND content_hash IS NOT NULL LIMIT 1`,
+        [actor.id, formatId],
+      );
+      if (!verified) throw new NotFoundException('EPUB identity changed; resolve the document again');
+      return this.locations.map(manager, actor.id, bookId, formatId);
+    });
+  }
 
   async requireBook(manager: EntityManager, actor: SyncActor, bookId: string) {
     await this.books.assertAccess(bookId, tenantScope(actor));
@@ -259,7 +292,7 @@ export class KoreaderDocumentService {
                   payload->>'progress',revision,to_timestamp((payload->>'timestamp')::double precision)
            FROM koreader_native_progress WHERE user_id=$1 AND document=$2
            ON CONFLICT(user_id,book_id) DO UPDATE SET percentage=EXCLUDED.percentage,source='koreader',
-             device=EXCLUDED.device,native_progress=EXCLUDED.native_progress,
+             device=EXCLUDED.device,native_progress=EXCLUDED.native_progress,location=NULL,
              revision=EXCLUDED.revision,updated_at=EXCLUDED.updated_at
            WHERE koreader_book_progress.revision<EXCLUDED.revision`,
           [actor.id, document, match.bookId],
@@ -269,6 +302,6 @@ export class KoreaderDocumentService {
     });
     if (result.pending) throw new ServiceUnavailableException('Identity indexing in progress; retry resolution');
     if (!result.match) throw new NotFoundException('Document is not a verified accessible EPUB');
-    return result.match;
+    return { ...result.match, capabilities: { portableLocation: 1 } };
   }
 }
