@@ -62,7 +62,12 @@ describe('KOReader native and extension HTTP contract', () => {
     annotations: jest.fn().mockResolvedValue({ items: [], cursor: '0', hasMore: false }),
     putAnnotation: jest.fn(),
   };
-  const documents = { resolve: jest.fn().mockResolvedValue({ bookId, formatId: 'format-id', title: 'Fixture' }) };
+  const documents = {
+    resolve: jest
+      .fn()
+      .mockResolvedValue({ bookId, formatId: 'format-id', title: 'Fixture', capabilities: { portableLocation: 1 } }),
+    locationMap: jest.fn().mockResolvedValue({ version: 1, resources: [], chapters: [] }),
+  };
   const jwt = {
     canActivate: (context) => {
       const req = context.switchToHttp().getRequest();
@@ -130,6 +135,28 @@ describe('KOReader native and extension HTTP contract', () => {
     expect(response.body).toEqual({ document, timestamp: 1792197000 });
     expect(service.putNativeProgress).toHaveBeenCalledWith(expect.objectContaining({ id: userId, deviceId }), payload);
     expect(response.headers['cache-control']).toBe('no-store');
+  });
+
+  test('serves only exact-format location maps through device-scoped authenticated access', async () => {
+    await request(app.getHttpServer())
+      .get(`/koreader/books/${bookId}/location-map?formatId=${deviceId}`)
+      .set(headers)
+      .expect(200, { version: 1, resources: [], chapters: [] });
+    expect(documents.locationMap).toHaveBeenCalledWith(
+      expect.objectContaining({ id: userId, deviceId }),
+      bookId,
+      deviceId,
+    );
+    await request(app.getHttpServer()).get(`/koreader/books/${bookId}/location-map`).set(headers).expect(400);
+    await request(app.getHttpServer())
+      .get(`/koreader/books/${bookId}/location-map?formatId=bad`)
+      .set(headers)
+      .expect(400);
+    await request(app.getHttpServer()).get(`/koreader/books/${bookId}/location-map?formatId=${deviceId}`).expect(401);
+    await request(app.getHttpServer())
+      .get(`/koreader/books/${bookId}/location-map?formatId=${deviceId}`)
+      .set('Authorization', '******')
+      .expect(401);
   });
 
   test('only scoped extension endpoints accept either browser JWT or device credentials', async () => {

@@ -171,6 +171,48 @@ export async function runNativeAcceptance() {
           });
           break;
         }
+        case 'chapter-linked':
+          assert.equal(message.bookId, harness.info.bookId);
+          assert.equal(message.formatId, harness.info.formatId);
+          break;
+        case 'chapter-native-progress': {
+          const progress = await browser<Record<string, unknown>>(`${prefix}/progress`);
+          assert.equal(progress.source, 'koreader');
+          assert.deepEqual(progress.location, message.location);
+          const target: unknown = message.target;
+          assert(
+            target &&
+              typeof target === 'object' &&
+              'href' in target &&
+              typeof target.href === 'string' &&
+              'resourceProgression' in target &&
+              typeof target.resourceProgression === 'number',
+            'Invalid browser chapter target',
+          );
+          await browser(`/users/${harness.info.userId}/saved-positions/${harness.info.bookId}`, 'PUT', {
+            position: JSON.stringify({ href: target.href, locations: { progression: target.resourceProgression } }),
+            deviceName: 'Browser chapter acceptance',
+            percentage: 0.83,
+            location: target,
+          });
+          const accepted = await browser<Record<string, unknown>>(`${prefix}/progress`);
+          assert.equal(accepted.source, 'web');
+          assert.deepEqual(accepted.location, target);
+          break;
+        }
+        case 'chapter-legacy-write': {
+          const href: unknown = message.href;
+          assert(typeof href === 'string', 'Invalid legacy EPUB resource');
+          await browser(`/users/${harness.info.userId}/saved-positions/${harness.info.bookId}`, 'PUT', {
+            position: JSON.stringify({ href, locations: { progression: 0.2 } }),
+            deviceName: 'Legacy browser acceptance',
+            percentage: 0.2,
+          });
+          const accepted = await browser<Record<string, unknown>>(`${prefix}/progress`);
+          assert.equal(accepted.source, 'web');
+          assert(accepted.location == null, 'A legacy write must clear the earlier portable chapter.');
+          break;
+        }
         case 'revoke':
           await browser(`/koreader/devices/${message.deviceId}`, 'DELETE');
           break;

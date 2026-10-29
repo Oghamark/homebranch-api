@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import * as AdmZip from 'adm-zip';
 import { IStorageService, STORAGE_SERVICE_TOKEN } from 'src/modules/storage/storage.interface';
 
@@ -8,6 +8,7 @@ type CachedEpubArchive = {
   key: string;
   mtimeMs: number;
   size: number;
+  etag?: string;
   zip: AdmZipArchive;
   lastAccessedAt: number;
 };
@@ -24,7 +25,7 @@ export class EpubArchiveCacheService {
   async getArchive(key: string): Promise<AdmZipArchive> {
     const stats = await this.storage.getFileStats(key);
     const cached = this.cache.get(key);
-    if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+    if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size && cached.etag === stats.etag) {
       cached.lastAccessedAt = Date.now();
       return cached.zip;
     }
@@ -33,12 +34,31 @@ export class EpubArchiveCacheService {
       this.remove(key);
     }
 
+    if (stats.size > 64 * 1024 * 1024) throw new BadRequestException('EPUB archive size limit exceeded');
     const { buffer } = await this.storage.getFileBuffer(key);
+    const after = await this.storage.getFileStats(key);
+    if (
+      buffer.length !== stats.size ||
+      after.size !== stats.size ||
+      after.mtimeMs !== stats.mtimeMs ||
+      after.etag !== stats.etag
+    ) {
+      throw new ServiceUnavailableException('EPUB changed while loading; retry');
+    }
     const zip = new AdmZip(buffer);
+    const entries = zip.getEntries();
+    if (
+      entries.length > 4096 ||
+      entries.reduce((sum, entry) => sum + entry.header.size, 0) > 64 * 1024 * 1024 ||
+      new Set(entries.map((entry) => entry.entryName)).size !== entries.length
+    ) {
+      throw new BadRequestException('EPUB archive expansion limit exceeded or duplicate entries');
+    }
     this.add({
       key,
       mtimeMs: stats.mtimeMs,
       size: buffer.byteLength,
+      etag: stats.etag,
       zip,
       lastAccessedAt: Date.now(),
     });

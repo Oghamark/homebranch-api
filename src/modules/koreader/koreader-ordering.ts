@@ -1,4 +1,5 @@
 import { EntityManager } from 'typeorm';
+import { PortableLocation } from '../book/publication/epub-location';
 
 /** The lock is held until commit, unlike a sequence whose values can commit out of order. */
 export async function lockSyncUser(manager: EntityManager, userId: string): Promise<string> {
@@ -20,14 +21,28 @@ export async function nextSyncRevision(manager: EntityManager, userId: string): 
 
 export async function acceptWebProgress(
   manager: EntityManager,
-  params: { userId: string; bookId: string; percentage?: number | null; deviceName: string },
-): Promise<void> {
+  params: {
+    userId: string;
+    bookId: string;
+    percentage?: number | null;
+    deviceName: string;
+    location?: PortableLocation;
+  },
+): Promise<string> {
   const revision = await nextSyncRevision(manager, params.userId);
   await manager.query(
-    `INSERT INTO koreader_book_progress(user_id,book_id,percentage,source,device,native_progress,revision)
-     VALUES($1,$2,$3,'web',$4,NULL,$5) ON CONFLICT(user_id,book_id) DO UPDATE
+    `INSERT INTO koreader_book_progress(user_id,book_id,percentage,source,device,native_progress,revision,location)
+     VALUES($1,$2,$3,'web',$4,NULL,$5,$6) ON CONFLICT(user_id,book_id) DO UPDATE
      SET percentage=EXCLUDED.percentage,source='web',device=EXCLUDED.device,native_progress=NULL,
-         revision=EXCLUDED.revision,updated_at=clock_timestamp()`,
-    [params.userId, params.bookId, params.percentage ?? null, params.deviceName, revision],
+         revision=EXCLUDED.revision,location=EXCLUDED.location,updated_at=clock_timestamp()`,
+    [
+      params.userId,
+      params.bookId,
+      params.percentage ?? null,
+      params.deviceName,
+      revision,
+      params.location ? JSON.stringify(params.location) : null,
+    ],
   );
+  return revision;
 }

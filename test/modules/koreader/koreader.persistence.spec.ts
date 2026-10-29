@@ -17,6 +17,10 @@ import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
 import { BookShelfEntity } from 'src/modules/book-shelf/book-shelf.entity';
 import { KOREADER_ENTITIES } from 'src/modules/koreader/koreader.entity';
 import { ContentHashService } from 'src/modules/book/format/content-hash.service';
+import { EpubPortableLocation1790000000013 } from 'src/migrations/1790000000013-EpubPortableLocation';
+import { EpubLocationService } from 'src/modules/book/publication/epub-location.service';
+import { EpubManifestService } from 'src/modules/book/publication/epub-manifest.service';
+import { EpubArchiveCacheService } from 'src/modules/book/publication/epub-archive-cache.service';
 
 const url = process.env.KOREADER_TEST_DATABASE_URL;
 const integration = url ? describe : describe.skip;
@@ -39,6 +43,7 @@ integration('KOReader PostgreSQL migrations, isolation, ordering and retries', (
   const opf = (title: string) =>
     `<package><metadata><title>${title}</title></metadata><manifest><item id="one" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/></spine></package>`;
   const storage = {
+    getFileBuffer: jest.fn(() => Promise.resolve({ buffer: bytes })),
     getFileStats: jest.fn(() => Promise.resolve({ size: bytes.length, mtimeMs: 1 })),
     getFileStream: jest.fn((_key, range?) =>
       Promise.resolve({
@@ -92,19 +97,22 @@ integration('KOReader PostgreSQL migrations, isolation, ordering and retries', (
     try {
       await new CreateKoreader1790000000011().up(runner);
       await new KoreaderVerifiedContent1790000000012().up(runner);
+      await new EpubPortableLocation1790000000013().up(runner);
     } finally {
       await runner.release();
     }
     auth = new KoreaderAuthService(db, { cloudMode: false } as never);
+    const locations = new EpubLocationService(new EpubManifestService(new EpubArchiveCacheService(storage as never)));
     documents = new KoreaderDocumentService(
       db,
       auth,
       { assertAccess: jest.fn() } as never,
       storage as never,
       new ContentHashService(storage as never),
+      locations,
     );
     service = new KoreaderService(db, auth, documents);
-    saved = new SavedPositionService(db.getRepository(SavedPositionEntity));
+    saved = new SavedPositionService(db.getRepository(SavedPositionEntity), locations);
   });
 
   afterAll(async () => {
@@ -123,7 +131,7 @@ integration('KOReader PostgreSQL migrations, isolation, ordering and retries', (
     const zip = new AdmZip();
     zip.addFile('META-INF/container.xml', Buffer.from('<container><rootfile full-path="book.opf"/></container>'));
     zip.addFile('book.opf', Buffer.from(opf('Fixture')));
-    zip.addFile('chapter.xhtml', Buffer.from('<p>exact quote</p>'));
+    zip.addFile('chapter.xhtml', Buffer.from('<html><body><p>exact quote</p></body></html>'));
     bytes = zip.toBuffer();
     await db.query(`TRUNCATE koreader_rate,koreader_alias,koreader_mutation,koreader_annotation,
       koreader_book_progress,koreader_native_progress,koreader_revision,koreader_pairing,koreader_device,
@@ -284,6 +292,7 @@ integration('KOReader PostgreSQL migrations, isolation, ordering and retries', (
         deviceName: 'Web',
         percentage: 0.2,
       });
+
       const latest = await service.progress(user, book);
       expect(latest).toMatchObject({ source: 'web', percentage: 0.2, revision: '2' });
       expect(latest).not.toHaveProperty('nativeProgress');
@@ -303,6 +312,160 @@ integration('KOReader PostgreSQL migrations, isolation, ordering and retries', (
     }
   });
 
+  test('stores raw and portable positions at one revision and preserves immutable retry acknowledgements', async () => {
+    const hash = partialMd5(bytes);
+    expect(await documents.resolve(user, { document: hash })).toMatchObject({ capabilities: { portableLocation: 1 } });
+    const map = await documents.locationMap(user, book, format);
+    const location = {
+      version: 1 as const,
+      formatId: format,
+      contentHash: map.contentHash,
+      mapFingerprint: map.fingerprint,
+      href: map.resources[0].href,
+      resourceProgression: 0.75,
+      basis: 'rendered' as const,
+      native: { engine: 'crengine' as const, domVersion: 20240101 },
+    };
+    const payload = { ...native('portable-native'), document: hash, location };
+    const ack = await service.putNativeProgress(user, payload);
+    const raw = await service.getNativeProgress(user, hash);
+    expect(raw).not.toHaveProperty('location');
+    expect(await service.progress(user, book)).toMatchObject({
+      location,
+      revision: '1',
+      nativeProgress: payload.progress,
+    });
+    const webLocation = { ...location, resourceProgression: 0.2 };
+    const web = await saved.save({
+      bookId: book,
+      userId: user.id,
+      position: 'raw-web',
+      deviceName: 'Web',
+      percentage: 0.2,
+      location: webLocation,
+    });
+    expect(web).toMatchObject({ location: webLocation, revision: '2', position: 'raw-web' });
+    expect(await service.progress(user, book)).toMatchObject({ location: webLocation, revision: web.revision });
+    expect(await service.putNativeProgress(user, payload)).toEqual(ack);
+    expect(await service.progress(user, book)).toMatchObject({ location: webLocation, revision: '2' });
+    await expect(service.putNativeProgress(user, { ...payload, location: webLocation })).rejects.toMatchObject({
+      status: 409,
+    });
+    await expect(
+      service.putNativeProgress(user, {
+        ...payload,
+        location: { ...location, native: { engine: 'crengine', domVersion: 20240102 } },
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    await service.putNativeProgress(user, { ...native('legacy-after-portable'), document: hash });
+    expect(await service.progress(user, book)).not.toHaveProperty('location');
+    expect(await service.progress(user, book)).toHaveProperty('nativeProgress', native().progress);
+    expect(await service.getNativeProgress(user, hash)).not.toHaveProperty('location');
+    await saved.save({
+      bookId: book,
+      userId: user.id,
+      position: 'new-legacy-web',
+      deviceName: 'Old Web',
+      percentage: 0.1,
+    });
+    expect((await saved.findByBookAndUser(book, user.id)).location).toBeNull();
+    expect(await service.progress(user, book)).not.toHaveProperty('location');
+  });
+
+  test('preserves the original legacy native mutation hash and clears stale portable projections', async () => {
+    const hash = partialMd5(bytes);
+    await documents.resolve(user, { document: hash });
+    const input = { ...native('legacy-hash'), document: hash };
+    await service.putNativeProgress(user, input);
+    const [mutation] = await db.query(
+      `SELECT request_hash FROM koreader_mutation WHERE user_id=$1 AND mutation_id=$2`,
+      [user.id, input.mutationId],
+    );
+    expect(mutation.request_hash).toBe(
+      verifier(
+        JSON.stringify(['native-progress', hash, input.progress, input.percentage, input.device, input.device_id]),
+      ),
+    );
+  });
+
+  test('rejects stale maps and wrong formats without accepting a write, and omits incompatible stored locations on reads', async () => {
+    const hash = partialMd5(bytes);
+    await expect(documents.locationMap(user, book, format)).rejects.toMatchObject({ status: 404 });
+    await documents.resolve(user, { document: hash });
+    const map = await documents.locationMap(user, book, format);
+    const location = {
+      version: 1 as const,
+      formatId: format,
+      contentHash: map.contentHash,
+      mapFingerprint: map.fingerprint,
+      href: map.resources[0].href,
+      resourceProgression: 0.5,
+      basis: 'rendered' as const,
+    };
+    await saved.save({
+      bookId: book,
+      userId: user.id,
+      position: 'raw-web',
+      deviceName: 'Web',
+      percentage: 0.5,
+      location,
+    });
+    await service.putNativeProgress(user, { ...native('stale-native'), document: hash, location });
+    expect(await service.progress(user, book)).toHaveProperty('nativeProgress', native().progress);
+    const raw = await service.getNativeProgress(user, hash);
+    await expect(documents.locationMap(user, book, randomUUID())).rejects.toMatchObject({ status: 404 });
+    await expect(
+      service.putNativeProgress(user, {
+        ...native('wrong-format'),
+        document: hash,
+        location: { ...location, formatId: randomUUID() },
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    const zip = new AdmZip(bytes);
+    zip.updateFile('chapter.xhtml', Buffer.from('<html><body><p>Changed edition text</p></body></html>'));
+    bytes = zip.toBuffer();
+    storage.getFileStats.mockImplementation(() => Promise.resolve({ size: bytes.length, mtimeMs: 2 }));
+    expect((await saved.findByBookAndUser(book, user.id)).location).toBeNull();
+    expect(await service.progress(user, book)).not.toHaveProperty('location');
+    expect(await service.progress(user, book)).not.toHaveProperty('nativeProgress');
+    expect(await service.getNativeProgress(user, hash)).toEqual(raw);
+    await expect(
+      saved.save({ bookId: book, userId: user.id, position: 'bad', deviceName: 'Web', percentage: 0.6, location }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect((await saved.findByBookAndUser(book, user.id)).position).toBe('raw-web');
+    expect(await service.progress(user, book)).toMatchObject({ revision: '2' });
+    process.env.CLOUD_MODE = 'true';
+    await expect(documents.locationMap(other, book, format)).rejects.toMatchObject({ status: 404 });
+  });
+
+  test('serializes competing native saves without mixing one revision percentage with another location', async () => {
+    const hash = partialMd5(bytes);
+    await documents.resolve(user, { document: hash });
+    const map = await documents.locationMap(user, book, format);
+    await Promise.all(
+      [0.2, 0.8].map((percentage) =>
+        service.putNativeProgress(user, {
+          ...native(`race-${percentage}`.replace('.', '-')),
+          document: hash,
+          percentage,
+          location: {
+            version: 1,
+            formatId: format,
+            contentHash: map.contentHash,
+            mapFingerprint: map.fingerprint,
+            href: map.resources[0].href,
+            resourceProgression: percentage,
+            basis: 'rendered',
+          },
+        }),
+      ),
+    );
+    const latest = await service.progress(user, book);
+    const raw = await service.getNativeProgress(user, hash);
+    expect(latest?.revision).toBe('2');
+    expect(latest?.location?.resourceProgression).toBe(latest?.percentage);
+    expect(raw.percentage).toBe(latest?.percentage);
+  });
   test('offers pre-integration web positions without inventing a native anchor', async () => {
     await db.getRepository(SavedPositionEntity).save({
       bookId: book,
@@ -503,11 +666,14 @@ integration('KOReader PostgreSQL migrations, isolation, ordering and retries', (
     try {
       const migration = new CreateKoreader1790000000011();
       const verified = new KoreaderVerifiedContent1790000000012();
+      const location = new EpubPortableLocation1790000000013();
+      await location.down(runner);
       await verified.down(runner);
       await migration.down(runner);
       expect(await db.query(`SELECT to_regclass('koreader_device') AS relation`)).toEqual([{ relation: null }]);
       await migration.up(runner);
       await verified.up(runner);
+      await location.up(runner);
       expect(await db.query(`SELECT count(*)::int AS count FROM koreader_device`)).toEqual([{ count: 0 }]);
     } finally {
       await runner.release();

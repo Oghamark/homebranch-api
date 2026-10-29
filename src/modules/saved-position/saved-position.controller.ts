@@ -31,6 +31,7 @@ export class SavedPositionController {
       position: dto.position,
       deviceName: dto.deviceName,
       percentage: dto.percentage,
+      ...(dto.location === undefined ? {} : { location: dto.location }),
     });
   }
 

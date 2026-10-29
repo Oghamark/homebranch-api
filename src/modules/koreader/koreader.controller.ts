@@ -165,6 +165,12 @@ export class KoreaderExtensionController {
     return this.documents.resolve(actor(request), body);
   }
 
+  @Get('books/:bookId/location-map')
+  @UseGuards(KoreaderDeviceGuard)
+  locationMap(@Req() request: SyncRequest, @Param('bookId') bookId: string, @Query('formatId') formatId: string) {
+    return this.documents.locationMap(actor(request), uuid(bookId), uuid(formatId));
+  }
+
   @Get('books/:bookId/progress')
   @UseGuards(KoreaderSyncGuard)
   async progress(@Req() request: SyncRequest, @Param('bookId') bookId: string, @Res() response: Response) {
