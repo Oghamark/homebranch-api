@@ -147,7 +147,7 @@ describe('Book club schedules', () => {
   it('patches a date without replacing steps or deleting their dependent data', async () => {
     milestoneRepository.find.mockResolvedValue(steps);
     const result = await service.patchSchedule(clubId, userId, { completionDate: '2026-12-01' });
-    expect(result.milestones).toEqual(steps.map(({ workId: _workId, ...step }) => step));
+    expect(result.milestones).toEqual(steps.map(({ id, name, kind, position }) => ({ id, name, kind, position })));
     expect(milestoneRepository.delete).not.toHaveBeenCalled();
     expect(milestoneRepository.update).not.toHaveBeenCalled();
     expect(milestoneRepository.save).not.toHaveBeenCalled();
