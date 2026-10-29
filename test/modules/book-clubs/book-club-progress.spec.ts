@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, GoneException, NotFoundException } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { BookEntity } from 'src/modules/book/book.entity';
 import { BookService } from 'src/modules/book/catalog/book.service';
@@ -183,7 +183,7 @@ describe('Book club member progress privacy', () => {
     expect(bookService.getBookById).not.toHaveBeenCalled();
   });
 
-  it('returns shared summaries only for opted-in members and excludes their reading-copy details', async () => {
+  it('returns every current member regardless of legacy sharing preference without private copy details', async () => {
     const optedIn = { ...member, id: 'member-opted-in', userId: otherUserId, progressSharingEnabled: true };
     const privateProgress = {
       ...member,
@@ -207,15 +207,20 @@ describe('Book club member progress privacy', () => {
     const schedule = await progressService().getSchedule(clubId, userId);
 
     expect(schedule).toMatchObject({
-      sharedProgress: [{ userId: otherUserId, milestones: [{ milestoneId, status: 'completed', percentage: null }] }],
+      progressSharingEnabled: true,
+      sharedProgress: [
+        { userId, milestones: [{ milestoneId, status: 'not_started', percentage: null }] },
+        { userId: otherUserId, milestones: [{ milestoneId, status: 'completed', percentage: null }] },
+        { userId: privateProgress.userId, milestones: [{ milestoneId, status: 'in_progress', percentage: 65 }] },
+      ],
       myMappings: [{ milestoneId, memberLabel: 'My own label', memberPosition: 7 }],
     });
     expect(JSON.stringify(schedule)).not.toMatch(
-      /private-book-id|other-private-book-id|hidden-book-id|private-reader|cfi|pageNumber|timestamp|annotation|readingHistory/i,
+      /private-book-id|other-private-book-id|hidden-book-id|cfi|pageNumber|timestamp|annotation|readingHistory/i,
     );
   });
 
-  it('loads only the caller and opted-in members selected copies without using BookService during the schedule transaction', async () => {
+  it('revalidates every member selected copy inside the schedule transaction', async () => {
     const optedIn = { ...member, id: 'member-opted-in', userId: otherUserId, progressSharingEnabled: true };
     const optedOut = { ...member, id: 'member-opted-out', userId: 'private-reader', progressSharingEnabled: false };
     memberRepository.find.mockResolvedValue([member, optedIn, optedOut]);
@@ -234,14 +239,16 @@ describe('Book club member progress privacy', () => {
     const [readingCopyQuery] = readingCopyRepository.find.mock.calls[0] as [
       { where: { memberId: { _value: string[] } } },
     ];
-    expect(readingCopyQuery.where.memberId._value).toEqual([member.id, optedIn.id]);
+    expect(readingCopyQuery.where.memberId._value).toEqual([member.id, optedIn.id, optedOut.id]);
     expect(bookService.getBookById).not.toHaveBeenCalled();
     expect(schedule.sharedProgress).toEqual([
+      { userId, milestones: [{ milestoneId, status: 'not_started', percentage: null }] },
       { userId: otherUserId, milestones: [{ milestoneId, status: 'completed', percentage: null }] },
+      { userId: optedOut.userId, milestones: [{ milestoneId, status: 'in_progress', percentage: 65 }] },
     ]);
   });
 
-  it('suppresses opted-in shared progress when a self-hosted member’s selected book was soft-deleted', async () => {
+  it('retains every member but suppresses stale progress when a selected book was soft-deleted', async () => {
     delete process.env.CLOUD_MODE;
     const optedIn = { ...member, id: 'member-opted-in', userId: otherUserId, progressSharingEnabled: true };
     memberRepository.find.mockResolvedValue([member, optedIn]);
@@ -260,7 +267,10 @@ describe('Book club member progress privacy', () => {
 
     const schedule = await progressService().getSchedule(clubId, userId);
 
-    expect(schedule.sharedProgress).toEqual([]);
+    expect(schedule.sharedProgress).toEqual([
+      { userId, milestones: [{ milestoneId, status: 'in_progress', percentage: 35 }] },
+      { userId: otherUserId, milestones: [{ milestoneId, status: 'not_started', percentage: null }] },
+    ]);
     expect(JSON.stringify(schedule)).not.toMatch(/deleted-book-id|cfi|pageNumber|timestamp|annotation|readingHistory/i);
     expect(bookService.getBookById).not.toHaveBeenCalled();
     expect(bookRepository.find).toHaveBeenCalledWith(
@@ -287,7 +297,7 @@ describe('Book club member progress privacy', () => {
     expect(JSON.stringify(schedule)).not.toMatch(/deleted-book-id|cfi|pageNumber|timestamp|annotation|readingHistory/i);
   });
 
-  it('suppresses caller and opted-in shared progress when the locked book access check cannot find their copies', async () => {
+  it('suppresses inaccessible-copy progress without removing members from the progress list', async () => {
     delete process.env.CLOUD_MODE;
     const optedIn = { ...member, id: 'member-opted-in', userId: otherUserId, progressSharingEnabled: true };
     memberRepository.find.mockResolvedValue([member, optedIn]);
@@ -304,26 +314,74 @@ describe('Book club member progress privacy', () => {
       expect.objectContaining({ select: { id: true, uploadedByUserId: true }, lock: { mode: 'pessimistic_write' } }),
     );
     expect(schedule.myProgress).toEqual([]);
-    expect(schedule.sharedProgress).toEqual([]);
+    expect(schedule.sharedProgress).toEqual([
+      { userId, milestones: [{ milestoneId, status: 'not_started', percentage: null }] },
+      { userId: otherUserId, milestones: [{ milestoneId, status: 'not_started', percentage: null }] },
+    ]);
     expect(JSON.stringify(schedule)).not.toMatch(
       /personal-book-id|shared-book-id|cfi|pageNumber|timestamp|annotation|readingHistory/i,
     );
   });
 
-  it('keeps progress sharing disabled until the member explicitly opts in', async () => {
-    const result = await progressService().setProgressSharing(clubId, userId, true);
+  it.each([true, false])(
+    'retires the legacy sharing toggle for enabled=%s without mutating membership',
+    async (enabled) => {
+      await expect(progressService().setProgressSharing(clubId, userId, enabled)).rejects.toBeInstanceOf(GoneException);
+      expect(memberRepository.save).not.toHaveBeenCalled();
+    },
+  );
 
-    expect(result).toEqual({ enabled: true });
-    expect(memberRepository.save).toHaveBeenCalledWith(expect.objectContaining({ progressSharingEnabled: true }));
-  });
-
-  it('allows an archived-club member to disable progress sharing but not enable it', async () => {
+  it('retires sharing preferences for archived clubs too', async () => {
     clubRepository.findOne.mockResolvedValue({ ...club, status: BookClubStatus.ARCHIVED });
 
-    await expect(progressService().setProgressSharing(clubId, userId, false)).resolves.toEqual({ enabled: false });
+    await expect(progressService().setProgressSharing(clubId, userId, false)).rejects.toBeInstanceOf(GoneException);
+    await expect(progressService().setProgressSharing(clubId, userId, true)).rejects.toBeInstanceOf(GoneException);
+    expect(memberRepository.save).not.toHaveBeenCalled();
+  });
+
+  it.each([BookClubRole.OWNER, BookClubRole.MODERATOR, BookClubRole.MEMBER])(
+    'shows all members, including those without any progress or reading copy, to a %s',
+    async (role) => {
+      memberRepository.findOne.mockResolvedValue({ ...member, role });
+      memberRepository.find.mockResolvedValue([member, { ...member, id: 'new-member', userId: otherUserId }]);
+      expect((await progressService().getSchedule(clubId, userId)).sharedProgress).toEqual([
+        { userId, milestones: [{ milestoneId, status: 'not_started', percentage: null }] },
+        { userId: otherUserId, milestones: [{ milestoneId, status: 'not_started', percentage: null }] },
+      ]);
+      expect(progressRepository.find).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retains all members when there are no reading steps and on archived clubs', async () => {
+    clubRepository.findOne.mockResolvedValue({ ...club, status: BookClubStatus.ARCHIVED });
+    milestoneRepository.find.mockResolvedValue([]);
+    memberRepository.find.mockResolvedValue([member, { ...member, id: 'new-member', userId: otherUserId }]);
+    expect((await progressService().getSchedule(clubId, userId)).sharedProgress).toEqual([
+      { userId, milestones: [] },
+      { userId: otherUserId, milestones: [] },
+    ]);
+  });
+
+  it('denies progress and the retired preference endpoint to non-members', async () => {
+    memberRepository.findOne.mockResolvedValue(null);
+    await expect(progressService().getSchedule(clubId, userId)).rejects.toBeInstanceOf(ForbiddenException);
     await expect(progressService().setProgressSharing(clubId, userId, true)).rejects.toBeInstanceOf(ForbiddenException);
-    expect(memberRepository.save).toHaveBeenCalledTimes(1);
-    expect(memberRepository.save).toHaveBeenCalledWith(expect.objectContaining({ progressSharingEnabled: false }));
+    expect(memberRepository.find).not.toHaveBeenCalled();
+  });
+
+  it('does not expose another Cloud member progress after copy ownership changes', async () => {
+    process.env.CLOUD_MODE = 'true';
+    memberRepository.find.mockResolvedValue([member, { ...member, id: 'other-member', userId: otherUserId }]);
+    readingCopyRepository.find.mockResolvedValue([
+      { memberId: 'other-member', workId, bookId: 'other-private-book-id', source: 'personal' },
+    ]);
+    bookRepository.find.mockResolvedValue([{ id: 'other-private-book-id', uploadedByUserId: userId }]);
+    progressRepository.find.mockResolvedValue([{ memberId: 'other-member', milestoneId, status: 'completed' }]);
+    expect((await progressService().getSchedule(clubId, userId)).sharedProgress).toEqual([
+      { userId, milestones: [{ milestoneId, status: 'not_started', percentage: null }] },
+      { userId: otherUserId, milestones: [{ milestoneId, status: 'not_started', percentage: null }] },
+    ]);
+    expect(progressRepository.find).not.toHaveBeenCalled();
   });
 
   it('clears edition-specific mappings and progress when a member clears their reading-copy choice', async () => {

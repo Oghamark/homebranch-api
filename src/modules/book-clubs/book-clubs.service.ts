@@ -540,9 +540,11 @@ export class BookClubsService {
         order: { position: 'ASC' },
       });
       const memberRepository = manager.getRepository(BookClubMemberEntity);
-      const members = await memberRepository.find({ where: { clubId } });
-      const shareableMembers = members.filter((member) => member.id !== actor.id && member.progressSharingEnabled);
-      const selectedMemberIds = [actor.id, ...shareableMembers.map((member) => member.id)];
+      const members = await memberRepository.find({
+        where: { clubId },
+        order: { createdAt: 'ASC', id: 'ASC' },
+      });
+      const selectedMemberIds = members.map((member) => member.id);
       const readingCopies = await manager
         .getRepository(BookClubReadingCopyEntity)
         .find({ where: { memberId: In(selectedMemberIds), workId: work.id } });
@@ -560,7 +562,7 @@ export class BookClubsService {
           lock: { mode: 'pessimistic_write' },
         });
         const authorizedBookOwners = new Map(books.map((book) => [book.id, book.uploadedByUserId]));
-        for (const member of [actor, ...shareableMembers]) {
+        for (const member of members) {
           const copy = selectedCopies.get(member.id);
           if (
             copy &&
@@ -577,29 +579,40 @@ export class BookClubsService {
       const mappingRepository = manager.getRepository(BookClubMilestoneMappingEntity);
       const progressRepository = manager.getRepository(BookClubMilestoneProgressEntity);
       const myMappings = await mappingRepository.find({ where: { memberId: actor.id, workId: work.id } });
-      const myProgress = selectedCopies.has(actor.id)
-        ? await progressRepository.find({ where: { memberId: actor.id, workId: work.id } })
-        : [];
-      const membersWithShareableProgress = shareableMembers.filter((member) => selectedCopies.has(member.id));
-      const sharedProgressRows = membersWithShareableProgress.length
+      const progressRows = selectedCopies.size
         ? await progressRepository.find({
-            where: { memberId: In(membersWithShareableProgress.map((member) => member.id)), workId: work.id },
+            where: { memberId: In([...selectedCopies.keys()]), workId: work.id },
           })
         : [];
-      const sharedProgress = membersWithShareableProgress.flatMap((member) => {
-        if (!selectedCopies.has(member.id)) return [];
-        const memberProgress = sharedProgressRows
-          .filter((progress) => progress.memberId === member.id)
-          .map(({ milestoneId, status, percentage }) => ({ milestoneId, status, percentage: percentage ?? null }));
-        return memberProgress.length ? [{ userId: member.userId, milestones: memberProgress }] : [];
-      });
+      const myProgress = progressRows.filter((progress) => progress.memberId === actor.id);
+      const progressByMember = new Map<string, Map<string, BookClubMilestoneProgressEntity>>();
+      for (const progress of progressRows) {
+        if (!selectedCopies.has(progress.memberId)) continue;
+        let memberProgress = progressByMember.get(progress.memberId);
+        if (!memberProgress) {
+          memberProgress = new Map();
+          progressByMember.set(progress.memberId, memberProgress);
+        }
+        memberProgress.set(progress.milestoneId, progress);
+      }
+      const sharedProgress = members.map((member) => ({
+        userId: member.userId,
+        milestones: milestones.map(({ id }) => {
+          const progress = progressByMember.get(member.id)?.get(id);
+          return {
+            milestoneId: id,
+            status: progress?.status ?? BookClubProgressStatus.NOT_STARTED,
+            percentage: progress?.percentage ?? null,
+          };
+        }),
+      }));
 
       return {
         clubId,
         startDate: club.startDate ?? null,
         completionDate: club.completionDate ?? null,
         milestones: milestones.map(({ id, name, kind, position }) => ({ id, name, kind, position })),
-        progressSharingEnabled: actor.progressSharingEnabled ?? false,
+        progressSharingEnabled: true,
         myMappings: myMappings.map(({ milestoneId, memberLabel, memberPosition }) => ({
           milestoneId,
           memberLabel,
@@ -754,14 +767,9 @@ export class BookClubsService {
   async setProgressSharing(clubId: string, userId: string, enabled: boolean): Promise<{ enabled: boolean }> {
     if (typeof enabled !== 'boolean') throw new BadRequestException('Progress-sharing preference must be a boolean');
     return this.dataSource.transaction(async (manager) => {
-      const { club, actor } = await this.getVisibleClub(manager, clubId, userId, true);
+      const { actor } = await this.getVisibleClub(manager, clubId, userId, true);
       if (!actor) throw new ForbiddenException('Book club membership required');
-      if (club.status !== BookClubStatus.ACTIVE && enabled) {
-        throw new ForbiddenException('Archived book clubs cannot be changed');
-      }
-      actor.progressSharingEnabled = enabled;
-      await manager.getRepository(BookClubMemberEntity).save(actor);
-      return { enabled };
+      throw new GoneException('Club reading-plan progress is now visible to all current members');
     });
   }
 

@@ -1,4 +1,11 @@
-import { CanActivate, ExecutionContext, INestApplication, UnauthorizedException, ValidationPipe } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  GoneException,
+  INestApplication,
+  UnauthorizedException,
+  ValidationPipe,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { BookClubsController } from 'src/modules/book-clubs/book-clubs.controller';
@@ -350,7 +357,7 @@ describe('BookClubsController API', () => {
       startDate: '2026-11-01',
       completionDate: '2026-12-01',
       milestones: [{ id: 'milestone-1', name: 'Part One', kind: 'part', position: 1 }],
-      progressSharingEnabled: false,
+      progressSharingEnabled: true,
       myMappings: [],
       myProgress: [],
       sharedProgress: [],
@@ -366,9 +373,11 @@ describe('BookClubsController API', () => {
     expect(service.getSchedule).toHaveBeenCalledWith(clubId, 'reader-1');
   });
 
-  it('lets a member explicitly opt into coarse progress sharing', async () => {
+  it('returns an explicit retirement response for the old progress-sharing endpoint', async () => {
     const clubId = '123e4567-e89b-42d3-a456-426614174001';
-    service.setProgressSharing.mockResolvedValue({ enabled: true });
+    service.setProgressSharing.mockRejectedValue(
+      new GoneException('Club reading-plan progress is now visible to all current members'),
+    );
 
     const response = await fetch(`${baseUrl}/book-clubs/${clubId}/progress-sharing`, {
       method: 'PUT',
@@ -376,8 +385,10 @@ describe('BookClubsController API', () => {
       body: JSON.stringify({ enabled: true }),
     });
 
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ enabled: true });
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({
+      message: 'Club reading-plan progress is now visible to all current members',
+    });
     expect(service.setProgressSharing).toHaveBeenCalledWith(clubId, 'reader-1', true);
   });
 

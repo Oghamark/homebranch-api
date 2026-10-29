@@ -28,7 +28,7 @@ Blocking denies requests/invitations in both directions, cancels pending request
 | Method | Route | Body / response |
 | --- | --- | --- |
 | GET | `/social/club-invitations` | `[{id,clubId,clubName,bookTitle,bookAuthor,inviterUserId,inviterName,expiresAt,status:"pending"}]`. Minimal recipient-only private preview. |
-| POST | `/social/club-invitations/:id/accept` | `{id,status:"accepted",clubId}`. Creates ordinary membership only, with progress sharing off and no reading-copy association. |
+| POST | `/social/club-invitations/:id/accept` | `{id,status:"accepted",clubId}`. Creates ordinary membership only, without a reading-copy association. Club reading-plan progress is visible to all current members; private reader data is never shared. |
 | POST | `/social/club-invitations/:id/decline` | `{id,status:"declined",clubId}`. |
 | GET | `/book-clubs/:clubId/invitations` | Active owner/moderator only → `[{id,userId,name,expiresAt,status:"pending"}]`. Not part of member roster. |
 | POST | `/book-clubs/:clubId/invitations` | Active owner/moderator only; `{userId}` → `{id,userId,name,expiresAt,status:"pending"}`. No roles accepted. |
