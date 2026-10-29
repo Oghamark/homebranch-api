@@ -5,6 +5,8 @@ export interface BookFileMetadata {
   publisher?: string;
   publishedYear?: number;
   isbn?: string;
+  externalWorkId?: string;
+  editionId?: string;
   summary?: string;
   genres?: string[];
   series?: string;

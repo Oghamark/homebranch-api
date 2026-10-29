@@ -14,6 +14,8 @@ export type BookFormatMetadataFields = Pick<
   | 'series'
   | 'seriesPosition'
   | 'isbn'
+  | 'externalWorkId'
+  | 'editionId'
   | 'pageCount'
   | 'publisher'
   | 'language'
@@ -36,6 +38,8 @@ export function buildBookFormatMetadata(
     series: seededMetadata.series,
     seriesPosition: seededMetadata.seriesPosition,
     isbn: seededMetadata.isbn,
+    externalWorkId: seededMetadata.externalWorkId,
+    editionId: seededMetadata.editionId,
     pageCount: seededMetadata.pageCount,
     publisher: seededMetadata.publisher,
     language: seededMetadata.language,
@@ -56,6 +60,8 @@ export function withBookMetadataFallback(format: BookFormatEntity, book: Book): 
     series: format.series ?? book.series,
     seriesPosition: format.seriesPosition ?? book.seriesPosition,
     isbn: format.isbn ?? book.isbn,
+    externalWorkId: format.externalWorkId ?? book.externalWorkId,
+    editionId: format.editionId ?? book.editionId,
     pageCount: format.pageCount ?? book.pageCount,
     publisher: format.publisher ?? book.publisher,
     language: format.language ?? book.language,
@@ -73,6 +79,8 @@ export function toBookOverridesFromFormat(format: BookFormatEntity): Partial<Boo
     series: format.series,
     seriesPosition: format.seriesPosition,
     isbn: format.isbn,
+    externalWorkId: format.externalWorkId,
+    editionId: format.editionId,
     pageCount: format.pageCount,
     publisher: format.publisher,
     language: format.language,

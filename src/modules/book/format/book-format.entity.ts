@@ -78,6 +78,12 @@ export class BookFormatEntity {
   @Column({ nullable: true })
   isbn?: string;
 
+  @Column({ name: 'external_work_id', type: 'varchar', nullable: true })
+  externalWorkId?: string;
+
+  @Column({ name: 'edition_id', type: 'varchar', nullable: true })
+  editionId?: string;
+
   @Column({ name: 'page_count', nullable: true })
   pageCount?: number;
 

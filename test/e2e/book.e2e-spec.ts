@@ -19,6 +19,7 @@ describe('BookController (e2e)', () => {
 
   const mockBookService = {
     getBooks: jest.fn(),
+    getCurrentUserBooks: jest.fn(),
     getGenres: jest.fn(),
     getFavoriteBooks: jest.fn(),
     getBookById: jest.fn(),
@@ -89,6 +90,28 @@ describe('BookController (e2e)', () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     expect(response.body.total).toBe(1);
     expect(mockBookService.getBooks).toHaveBeenCalledWith(expect.objectContaining({ viewerUserId: 'user-123' }));
+  });
+
+  test('lists the authenticated users library before the book id route and ignores a forged user id', async () => {
+    mockBookService.getCurrentUserBooks.mockResolvedValueOnce({
+      data: [mockBook],
+      total: 1,
+      limit: 10,
+      offset: 5,
+      nextCursor: null,
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/books/mine?userId=someone-else&query=Test&limit=10&offset=5')
+      .expect(200);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    expect(response.body.data).toEqual([expect.objectContaining({ id: mockBook.id })]);
+    expect(mockBookService.getCurrentUserBooks).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'someone-else', query: 'Test', limit: '10', offset: '5' }),
+      'user-123',
+    );
+    expect(mockBookService.getBookById).not.toHaveBeenCalled();
   });
 
   test('gets favorite books with a plain response payload', async () => {

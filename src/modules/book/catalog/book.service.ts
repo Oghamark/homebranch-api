@@ -8,7 +8,8 @@ import { GetBooksRequest } from 'src/modules/book/dto/get-books-request';
 import { Book, copyBook } from 'src/modules/book/book.model';
 import { BookFormatType } from 'src/modules/book/format/book-format-type.enum';
 import { getDefaultBookFormatType, getRequestedBookFormatFromBook } from 'src/modules/book/format/book-format';
-import { BookPersistenceService } from 'src/modules/book/persistence/book.persistence';
+import { BookPersistenceService, WorkBookIdentifiers } from 'src/modules/book/persistence/book.persistence';
+import { isCloudMode } from 'src/common/utils/cloud';
 import { IStorageService, STORAGE_SERVICE_TOKEN } from '../../storage/storage.interface';
 
 export interface DownloadBookResult {
@@ -53,6 +54,14 @@ export class BookService {
     return this.bookPersistenceService.findBooks(limit, offset, userId, viewerUserId);
   }
 
+  async getCurrentUserBooks(request: GetBooksRequest, currentUserId: string): Promise<PaginationResult<Book[]>> {
+    return this.getBooks({
+      ...request,
+      userId: currentUserId,
+      viewerUserId: currentUserId,
+    });
+  }
+
   async getNewArrivals(limit?: number, offset?: number, ownerScope?: string): Promise<PaginationResult<Book[]>> {
     return this.bookPersistenceService.findNewArrivals(limit, offset, ownerScope);
   }
@@ -87,6 +96,10 @@ export class BookService {
 
   async getBookById(id: string, viewerUserId?: string, ownerScope?: string): Promise<Book> {
     return this.bookPersistenceService.findBookById(id, viewerUserId, ownerScope);
+  }
+
+  async getMatchingBooks(work: WorkBookIdentifiers, userId: string): Promise<Book[]> {
+    return this.bookPersistenceService.findMatchingBooksForWork(work, isCloudMode() ? userId : undefined);
   }
 
   /** Throws NotFound when ownerScope is set and the book is not owned by that user. */

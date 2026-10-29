@@ -193,6 +193,8 @@ export class BookFormatProcessingService {
       format.series = metadata.series;
       format.seriesPosition = metadata.seriesPosition;
       format.isbn = metadata.isbn;
+      format.externalWorkId = metadata.externalWorkId;
+      format.editionId = metadata.editionId;
       format.pageCount = metadata.pageCount;
       format.publisher = metadata.publisher;
       format.language = metadata.language;

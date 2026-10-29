@@ -33,6 +33,28 @@ import { AddFileSizeToBookFormat1790000000000 } from 'src/migrations/17900000000
 import { CreateUserPreferenceTable1790000000001 } from 'src/migrations/1790000000001-CreateUserPreferenceTable';
 import { UserPreferenceEntity } from 'src/modules/kindle/user-preference.entity';
 import { AddAudioTracksToBookFormat1790000000002 } from 'src/migrations/1790000000002-AddAudioTracksToBookFormat';
+import { CreateBookClubCore1790000000003 } from 'src/migrations/1790000000003-CreateBookClubCore';
+import { BookClubEntity } from 'src/modules/book-clubs/entities/book-club.entity';
+import { BookClubMemberEntity } from 'src/modules/book-clubs/entities/book-club-member.entity';
+import { BookClubWorkEntity } from 'src/modules/book-clubs/entities/book-club-work.entity';
+import { BookClubReadingCopyEntity } from 'src/modules/book-clubs/entities/book-club-reading-copy.entity';
+import { CreateBookClubReadingCopy1790000000004 } from 'src/migrations/1790000000004-CreateBookClubReadingCopy';
+import { AddBookClubWorkMatching1790000000005 } from 'src/migrations/1790000000005-AddBookClubWorkMatching';
+import { AddBookClubSchedules1790000000006 } from 'src/migrations/1790000000006-AddBookClubSchedules';
+import { BookClubMilestoneEntity } from 'src/modules/book-clubs/entities/book-club-milestone.entity';
+import { BookClubMilestoneMappingEntity } from 'src/modules/book-clubs/entities/book-club-milestone-mapping.entity';
+import { BookClubMilestoneProgressEntity } from 'src/modules/book-clubs/entities/book-club-milestone-progress.entity';
+import { AddBookClubPrivacyProgress1790000000007 } from 'src/migrations/1790000000007-AddBookClubPrivacyProgress';
+import { AddBookClubDiscussions1790000000008 } from 'src/migrations/1790000000008-AddBookClubDiscussions';
+import { EnforceBookClubDiscussionReplyClub1790000000009 } from 'src/migrations/1790000000009-EnforceBookClubDiscussionReplyClub';
+import { BookClubDiscussionThreadEntity } from 'src/modules/book-clubs/entities/book-club-discussion-thread.entity';
+import { BookClubDiscussionReplyEntity } from 'src/modules/book-clubs/entities/book-club-discussion-reply.entity';
+import { BookClubModerationAuditEntity } from 'src/modules/book-clubs/entities/book-club-moderation-audit.entity';
+import { SOCIAL_ENTITIES } from 'src/modules/social/social.entity';
+import { CreateSocial1790000000010 } from 'src/migrations/1790000000010-CreateSocial';
+import { KOREADER_ENTITIES } from '../koreader/koreader.entity';
+import { CreateKoreader1790000000011 } from 'src/migrations/1790000000011-CreateKoreader';
+import { KoreaderVerifiedContent1790000000012 } from 'src/migrations/1790000000012-KoreaderVerifiedContent';
 
 @Module({
   imports: [
@@ -62,6 +84,8 @@ import { AddAudioTracksToBookFormat1790000000002 } from 'src/migrations/17900000
           password: password,
           database: database,
           entities: [
+            ...KOREADER_ENTITIES,
+            ...SOCIAL_ENTITIES,
             BookEntity,
             BookFormatEntity,
             BookShelfEntity,
@@ -71,8 +95,21 @@ import { AddAudioTracksToBookFormat1790000000002 } from 'src/migrations/17900000
             UserBookFavoriteEntity,
             BookDuplicateEntity,
             UserPreferenceEntity,
+            BookClubEntity,
+            BookClubMemberEntity,
+            BookClubWorkEntity,
+            BookClubReadingCopyEntity,
+            BookClubMilestoneEntity,
+            BookClubMilestoneMappingEntity,
+            BookClubMilestoneProgressEntity,
+            BookClubDiscussionThreadEntity,
+            BookClubDiscussionReplyEntity,
+            BookClubModerationAuditEntity,
           ],
           migrations: [
+            KoreaderVerifiedContent1790000000012,
+            CreateKoreader1790000000011,
+            CreateSocial1790000000010,
             SchemaUpdate1755566512418,
             AddUserAndRoleTables1739836800000,
             SeedAdminRole1739836800001,
@@ -95,6 +132,13 @@ import { AddAudioTracksToBookFormat1790000000002 } from 'src/migrations/17900000
             AddFileSizeToBookFormat1790000000000,
             CreateUserPreferenceTable1790000000001,
             AddAudioTracksToBookFormat1790000000002,
+            CreateBookClubCore1790000000003,
+            CreateBookClubReadingCopy1790000000004,
+            AddBookClubWorkMatching1790000000005,
+            AddBookClubSchedules1790000000006,
+            AddBookClubPrivacyProgress1790000000007,
+            AddBookClubDiscussions1790000000008,
+            EnforceBookClubDiscussionReplyClub1790000000009,
           ],
           migrationsRun: true,
           migrationsTableName: 'migration_table',

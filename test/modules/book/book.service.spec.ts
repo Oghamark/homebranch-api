@@ -60,6 +60,32 @@ describe('BookService', () => {
     ).resolves.toEqual(paginationResult);
   });
 
+  test('lists only the authenticated users books while preserving filters and pagination', async () => {
+    const paginationResult: PaginationResult<Book[]> = {
+      data: [mockBook],
+      total: 1,
+      limit: 10,
+      offset: 5,
+      nextCursor: null,
+    };
+    bookPersistenceService.searchBooksWithFilters.mockResolvedValueOnce(paginationResult);
+
+    await expect(
+      service.getCurrentUserBooks(
+        { query: 'Test', limit: 10, offset: 5, userId: 'someone-else', genre: 'Fantasy' },
+        'authenticated-user',
+      ),
+    ).resolves.toEqual(paginationResult);
+
+    expect(bookPersistenceService.searchBooksWithFilters).toHaveBeenCalledWith(
+      { query: 'Test', isbn: undefined, genre: 'Fantasy', series: undefined, author: undefined },
+      10,
+      5,
+      'authenticated-user',
+      'authenticated-user',
+    );
+  });
+
   test('lists favorite books without filters through favorite query helper', async () => {
     const paginationResult: PaginationResult<Book[]> = {
       data: [{ ...mockBook, isFavorite: true }],
