@@ -302,6 +302,6 @@ export class KoreaderDocumentService {
     });
     if (result.pending) throw new ServiceUnavailableException('Identity indexing in progress; retry resolution');
     if (!result.match) throw new NotFoundException('Document is not a verified accessible EPUB');
-    return { ...result.match, capabilities: { portableLocation: 1 } };
+    return { ...result.match, capabilities: { portableLocation: 1, passageAnchor: 1 } };
   }
 }

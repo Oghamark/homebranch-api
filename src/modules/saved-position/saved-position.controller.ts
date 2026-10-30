@@ -3,6 +3,7 @@ import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { SavePositionDto } from 'src/modules/saved-position/dto/save-position.dto';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { SavedPositionService } from 'src/modules/saved-position/saved-position.service';
+import { tenantScope } from 'src/common/utils/cloud';
 
 @Controller('users/:userId/saved-positions')
 @UseGuards(JwtAuthGuard)
@@ -12,6 +13,11 @@ export class SavedPositionController {
   @Get()
   getSavedPositions(@CurrentUser() currentUser: Express.User) {
     return this.savedPositionService.findAllByUser(currentUser.id);
+  }
+
+  @Get('book-ids')
+  getReadingBookIds(@CurrentUser() currentUser: Express.User) {
+    return this.savedPositionService.findReadingBookIds(currentUser.id, tenantScope(currentUser));
   }
 
   @Get(':bookId')

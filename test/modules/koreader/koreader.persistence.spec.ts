@@ -312,6 +312,65 @@ integration('KOReader PostgreSQL migrations, isolation, ordering and retries', (
     }
   });
 
+  test('discovers plugin-only reading, including zero percent, without fabricating a browser position', async () => {
+    const hash = partialMd5(bytes);
+    await documents.resolve(user, { document: hash });
+    const payload = { ...native('reading-start'), document: hash, percentage: 0 };
+    const ack = await service.putNativeProgress(user, payload);
+    expect(await saved.findAllByUser(user.id)).toEqual([]);
+    await expect(saved.findByBookAndUser(book, user.id)).rejects.toMatchObject({ status: 404 });
+    expect(await saved.findReadingBookIds(user.id, user.id)).toEqual([book]);
+    expect(await saved.findReadingBookIds(other.id)).toEqual([]);
+    const raw = await service.getNativeProgress(user, hash);
+
+    await saved.delete(book, user.id);
+    expect(await saved.findReadingBookIds(user.id)).toEqual([]);
+    expect(await service.progress(user, book)).toBeNull();
+    expect(await service.getNativeProgress(user, hash)).toEqual(raw);
+    expect(await service.putNativeProgress(user, payload)).toEqual(ack);
+    await documents.resolve(user, { document: hash });
+    expect(await saved.findReadingBookIds(user.id)).toEqual([]);
+    await expect(saved.delete(book, user.id)).rejects.toMatchObject({ status: 404 });
+
+    await service.putNativeProgress(user, { ...payload, mutationId: 'reading-again', percentage: 0.1 });
+    expect(await saved.findReadingBookIds(user.id)).toEqual([book]);
+    await saved.save({
+      bookId: book,
+      userId: user.id,
+      position: '{"href":"chapter.xhtml"}',
+      deviceName: 'Web',
+      percentage: 0.2,
+    });
+    expect(await saved.findReadingBookIds(user.id)).toEqual([book]);
+    await service.putNativeProgress(user, { ...payload, mutationId: 'reading-newer', percentage: 0.3 });
+    await saved.delete(book, user.id);
+    expect(await saved.findReadingBookIds(user.id)).toEqual([]);
+    expect(await service.progress(user, book)).toBeNull();
+    expect(await saved.findAllByUser(user.id)).toEqual([]);
+  });
+
+  test('reading discovery filters tenants and deleted books while retaining browser-only formats', async () => {
+    const privateBook = randomUUID();
+    const deletedBook = randomUUID();
+    const browserBook = randomUUID();
+    await db.query(
+      `INSERT INTO book_entity(id,title,uploaded_by_user_id,deleted_at)
+       VALUES ($1,'Other tenant',$4,NULL),($2,'Deleted',$5,now()),($3,'Browser only',$5,NULL)`,
+      [privateBook, deletedBook, browserBook, other.id, user.id],
+    );
+    for (const id of [book, privateBook, deletedBook]) {
+      await db.query(
+        `INSERT INTO koreader_book_progress(user_id,book_id,percentage,source,device,revision,updated_at)
+         VALUES($1,$2,0,'koreader','Reader',1,clock_timestamp())`,
+        [user.id, id],
+      );
+    }
+    await saved.save({ bookId: browserBook, userId: user.id, position: 'browser-only', deviceName: 'Web' });
+    expect(new Set(await saved.findReadingBookIds(user.id))).toEqual(new Set([book, privateBook, browserBook]));
+    expect(new Set(await saved.findReadingBookIds(user.id, user.id))).toEqual(new Set([book, browserBook]));
+    expect(await saved.findReadingBookIds(other.id)).toEqual([]);
+  });
+
   test('stores raw and portable positions at one revision and preserves immutable retry acknowledgements', async () => {
     const hash = partialMd5(bytes);
     expect(await documents.resolve(user, { document: hash })).toMatchObject({ capabilities: { portableLocation: 1 } });
@@ -325,6 +384,7 @@ integration('KOReader PostgreSQL migrations, isolation, ordering and retries', (
       resourceProgression: 0.75,
       basis: 'rendered' as const,
       native: { engine: 'crengine' as const, domVersion: 20240101 },
+      passage: { version: 1 as const, exact: 'exact quote' },
     };
     const payload = { ...native('portable-native'), document: hash, location };
     const ack = await service.putNativeProgress(user, payload);
@@ -351,6 +411,15 @@ integration('KOReader PostgreSQL migrations, isolation, ordering and retries', (
     await expect(service.putNativeProgress(user, { ...payload, location: webLocation })).rejects.toMatchObject({
       status: 409,
     });
+    await expect(
+      service.putNativeProgress(user, {
+        ...payload,
+        location: {
+          ...location,
+          passage: { version: 1, exact: 'different passage' },
+        },
+      }),
+    ).rejects.toMatchObject({ status: 409 });
     await expect(
       service.putNativeProgress(user, {
         ...payload,

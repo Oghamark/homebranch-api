@@ -154,6 +154,21 @@ describe('portable EPUB map and wire contract', () => {
       basis: 'rendered',
     };
     expect(() => validatePortableLocation(parsePortableLocation(valid), map)).not.toThrow();
+    expect(map.capabilities?.passageAnchor).toBe(1);
+    const passage = { version: 1, exact: 'The orchard keeper', prefix: 'Long orchard', suffix: 'walked' };
+    expect(parsePortableLocation({ ...valid, passage }).passage).toEqual(passage);
+    for (const invalid of [
+      null,
+      {},
+      { ...passage, version: 2 },
+      { ...passage, exact: 'short' },
+      { ...passage, exact: 'x'.repeat(257) },
+      { ...passage, prefix: 'x'.repeat(65) },
+      { ...passage, suffix: 'x'.repeat(65) },
+      { ...passage, exact: 'invalid\u0000text' },
+      { ...passage, native: 'not portable' },
+    ])
+      expect(() => parsePortableLocation({ ...valid, passage: invalid })).toThrow();
     expect(parsePortableLocation({ ...valid, native: { engine: 'crengine', domVersion: 20240101 } }).native).toEqual({
       engine: 'crengine',
       domVersion: 20240101,

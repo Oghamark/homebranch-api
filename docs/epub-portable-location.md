@@ -13,6 +13,7 @@ after verified document resolution. Resolution advertises
 ```ts
 interface LocationMap {
   version: 1;
+  capabilities?: { passageAnchor: 1 };
   formatId: string;
   contentHash: string;
   fingerprint: string;
@@ -70,6 +71,7 @@ interface PortableLocation {
   chapterProgression?: number;
   basis: 'text' | 'rendered';
   native?: { engine: 'crengine'; domVersion: number };
+  passage?: { version: 1; exact: string; prefix?: string; suffix?: string };
 }
 ```
 
@@ -83,10 +85,35 @@ The optional native metadata identifies the actual DOM version used to create
 the separate native pointer. A new portable location's native pointer is usable
 for precise restoration only with matching publication/map and DOM version.
 The existing raw web locator and native pointer remain available for
-compatible precise restoration. Cross-engine jumps use the verified chapter
-and its progression before considering resource or whole-book approximation.
+compatible precise restoration. Cross-engine jumps prefer a verified literal
+passage before chapter progression, resource progression, and whole-book
+approximation. A verified passage means the same text, not identical pagination
+or screen coordinates.
 Destination-local chapter pages may be displayed as approximate, but are never
 stored as universal coordinates.
+
+Passages are optional and edition/resource-bound. `exact` is at most 256 UTF-16
+units and must contain at least eight units after trimming; optional nonempty
+contexts are at most 64 units each. Control characters and unknown fields are
+rejected. Clients capture whitespace-normalized excerpts without cutting
+surrogate pairs. Matching is literal, confined to the resource/chapter
+intersection, and requires a unique occurrence or uniquely matching context.
+Ambiguous, missing, or over-limit passages retain an explicitly labeled
+approximate fallback. A passage must never establish an otherwise unverified
+chapter identity.
+
+The plugin extracts excerpts inside its cooperative sync worker, not during page
+turns. It retains one outgoing excerpt, one incoming match, and one normalized
+scope. Passage verification is limited to 65,536 text units, 256 KiB of exported
+HTML, and 2,048 opening tags. Native candidate searches are publication-wide
+because crengine exposes no scoped search argument; their results are capped at
+257 and filtered to the verified scope. Very common prefixes can therefore
+require fallback even when a scope contains a unique passage. The duplicate
+proof and context exports stay inside that scope; passage matching does not
+export the whole publication or build a publication-wide character index.
+The existing chapter-boundary mapper has separate publication-level limits.
+Native calls cannot be interrupted mid-call, so desktop timing is not a
+performance guarantee for an e-reader.
 
 Writes update raw/native progress and its portable projection under the same
 server revision. Legacy writes clear stale portable data. Retried operations
@@ -96,6 +123,26 @@ backfilled into exact chapter identities.
 
 ## API rollout and compatibility
 
+- Deploy passage-capable API validation first. Document resolution advertises
+  `capabilities.passageAnchor = 1`, and location maps advertise the same optional
+  capability. Clients omit passage fields when the map does not advertise
+  support. Capabilities do not alter map fingerprints. Existing nullable JSONB
+  locations carry the additive passage without a new migration. Passage fields
+  participate in mutation hashes when supplied; operations without them retain
+  their historical serialization and retry acknowledgements.
+- `GET /users/:userId/saved-positions/book-ids` discovers reading books from the
+  authenticated user's actual browser positions and accepted linked shared
+  progress, including zero percent. IDs are deduplicated and filtered for deleted
+  books and cloud tenant access. The URL user ID never selects another user's
+  data. This does not create or return synthetic browser locators; existing
+  saved-position reads retain their original contract. Deploy the API before
+  the web client that consumes this discovery endpoint.
+- Resetting a reading position through the existing per-book `DELETE` also
+  accepts plugin-only progress. It clears the browser row and shared
+  percentage/native/portable projection under a new server revision, regardless
+  of which reader last wrote it. Raw native history and immutable mutation
+  acknowledgements remain intact. Replaying an accepted operation or relinking
+  its old native history cannot resurrect the entry; new reading progress can.
 - Deploy migration `1790000000013-EpubPortableLocation` before updated clients.
   It adds nullable JSONB locations to saved positions and shared progress, and a
   nullable saved-position revision. Historical rows are left unchanged.
