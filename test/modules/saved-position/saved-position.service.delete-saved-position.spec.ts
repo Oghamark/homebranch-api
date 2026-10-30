@@ -16,7 +16,13 @@ describe('SavedPositionService.delete', () => {
       transaction: jest.fn((work: (value: unknown) => Promise<unknown>) => work(manager)),
       getRepository: () => repository,
       query: jest.fn((sql: string) =>
-        Promise.resolve(sql.includes('SET revision=revision+1') ? [[{ revision: '1' }], 1] : [{ revision: '1' }]),
+        Promise.resolve(
+          sql.startsWith('SELECT book_id')
+            ? []
+            : sql.includes('SET revision=revision+1')
+              ? [[{ revision: '1' }], 1]
+              : [{ revision: '1' }],
+        ),
       ),
     };
     const module: TestingModule = await Test.createTestingModule({

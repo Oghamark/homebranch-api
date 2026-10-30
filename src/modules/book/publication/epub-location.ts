@@ -13,6 +13,7 @@ export interface BoundaryAnchor {
 
 export interface LocationMap {
   version: 1;
+  capabilities?: { passageAnchor: 1 };
   formatId: string;
   contentHash: string;
   fingerprint: string;
@@ -40,6 +41,7 @@ export interface PortableLocation {
   chapterProgression?: number;
   basis: 'text' | 'rendered';
   native?: { engine: 'crengine'; domVersion: number };
+  passage?: BoundaryAnchor;
 }
 
 interface XmlNode {
@@ -431,7 +433,7 @@ export function buildLocationMap(zip: AdmZip, publication: EpubPackage, formatId
   const fingerprint = createHash('sha256')
     .update(JSON.stringify({ version: 1, contentHash, resources, chapters, toc: publication.toc }))
     .digest('hex');
-  return { version: 1, formatId, contentHash, fingerprint, resources, chapters };
+  return { version: 1, formatId, contentHash, fingerprint, resources, chapters, capabilities: { passageAnchor: 1 } };
 }
 
 export function parsePortableLocation(value: unknown): PortableLocation {
@@ -449,6 +451,7 @@ export function parsePortableLocation(value: unknown): PortableLocation {
     'chapterProgression',
     'basis',
     'native',
+    'passage',
   ]);
   const fraction = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
   const bounded = (value: unknown) =>
@@ -471,6 +474,29 @@ export function parsePortableLocation(value: unknown): PortableLocation {
     throw new BadRequestException('Invalid portable location');
   }
   let native: PortableLocation['native'];
+  let passage: PortableLocation['passage'];
+  if (input.passage !== undefined) {
+    if (!input.passage || typeof input.passage !== 'object' || Array.isArray(input.passage))
+      throw new BadRequestException('Invalid portable passage anchor');
+    const anchor = input.passage as Record<string, unknown>;
+    const text = (value: unknown, limit: number) =>
+      typeof value === 'string' && value.length > 0 && value.length <= limit && !containsControls(value);
+    if (
+      Object.keys(anchor).some((key) => !['version', 'exact', 'prefix', 'suffix'].includes(key)) ||
+      anchor.version !== 1 ||
+      !text(anchor.exact, 256) ||
+      (anchor.exact as string).trim().length < 8 ||
+      (anchor.prefix !== undefined && !text(anchor.prefix, 64)) ||
+      (anchor.suffix !== undefined && !text(anchor.suffix, 64))
+    )
+      throw new BadRequestException('Invalid portable passage anchor');
+    passage = {
+      version: 1,
+      exact: anchor.exact as string,
+      ...(anchor.prefix === undefined ? {} : { prefix: anchor.prefix as string }),
+      ...(anchor.suffix === undefined ? {} : { suffix: anchor.suffix as string }),
+    };
+  }
   if (input.native !== undefined) {
     if (!input.native || typeof input.native !== 'object' || Array.isArray(input.native)) {
       throw new BadRequestException('Invalid portable native provenance');
@@ -500,6 +526,7 @@ export function parsePortableLocation(value: unknown): PortableLocation {
     ...(input.chapterId === undefined
       ? {}
       : { chapterId: input.chapterId as string, chapterProgression: input.chapterProgression as number }),
+    ...(passage ? { passage } : {}),
   };
 }
 

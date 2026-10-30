@@ -24,6 +24,21 @@ export class SavedPositionService {
     return compatible;
   }
 
+  async findReadingBookIds(userId: string, ownerId?: string): Promise<string[]> {
+    const rows: { book_id: string }[] = await this.savedPositionsRepository.manager.query(
+      `SELECT reading.book_id FROM (
+         SELECT book_id,updated_at FROM saved_position_entity WHERE user_id=$1
+         UNION ALL
+         SELECT book_id,updated_at FROM koreader_book_progress WHERE user_id=$1 AND percentage IS NOT NULL
+       ) reading
+       INNER JOIN book_entity b ON b.id=reading.book_id
+       WHERE b.deleted_at IS NULL AND ($2::varchar IS NULL OR b.uploaded_by_user_id=$2)
+       GROUP BY reading.book_id ORDER BY MAX(reading.updated_at) DESC,reading.book_id`,
+      [userId, ownerId ?? null],
+    );
+    return rows.map((row) => row.book_id);
+  }
+
   private async compatible(row: SavedPositionEntity): Promise<SavedPositionEntity> {
     if (!row.location) return row;
     return {
@@ -85,11 +100,17 @@ export class SavedPositionService {
     await this.savedPositionsRepository.manager.transaction(async (manager) => {
       await lockSyncUser(manager, userId);
       const result = await manager.getRepository(SavedPositionEntity).delete({ bookId, userId });
-      if (result.affected === 0) throw new NotFoundException('Saved position not found');
+      if (result.affected === 0) {
+        const [progress] = await manager.query<{ book_id: string }[]>(
+          `SELECT book_id FROM koreader_book_progress WHERE user_id=$1 AND book_id=$2 AND percentage IS NOT NULL`,
+          [userId, bookId],
+        );
+        if (!progress) throw new NotFoundException('Saved position not found');
+      }
       const revision = await nextSyncRevision(manager, userId);
       await manager.query(
         `UPDATE koreader_book_progress SET percentage=NULL,native_progress=NULL,location=NULL,revision=$3,updated_at=clock_timestamp()
-         WHERE user_id=$1 AND book_id=$2 AND source='web'`,
+         WHERE user_id=$1 AND book_id=$2`,
         [userId, bookId, revision],
       );
     });
