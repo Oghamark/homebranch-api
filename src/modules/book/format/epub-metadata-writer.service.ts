@@ -3,10 +3,6 @@ import * as AdmZip from 'adm-zip';
 import { convert, create } from 'xmlbuilder2';
 import { SyncableMetadata } from 'src/common/value-objects/syncable-metadata';
 import { IStorageService, STORAGE_SERVICE_TOKEN } from '../../storage/storage.interface';
-import { randomUUID } from 'crypto';
-import { dirname, join } from 'path';
-import { removeSync } from 'fs-extra';
-import { existsSync } from 'fs';
 
 @Injectable()
 export class EpubMetadataWriterService {
@@ -15,7 +11,6 @@ export class EpubMetadataWriterService {
   constructor(@Inject(STORAGE_SERVICE_TOKEN) private readonly storage: IStorageService) {}
 
   async writeMetadata(epubPath: string, metadata: SyncableMetadata): Promise<void> {
-    const tempPath = join(dirname(epubPath), `.tmp-${randomUUID()}.epub`);
     try {
       const fileBufferResult = await this.storage.getFileBuffer(epubPath);
       const zip = new AdmZip(fileBufferResult.buffer);
@@ -27,17 +22,14 @@ export class EpubMetadataWriterService {
       const opfContent = zip.readAsText(opfPath);
       const updatedOpf = this.updateOpfMetadata(opfContent, metadata);
       zip.updateFile(opfPath, Buffer.from(updatedOpf, 'utf-8'));
-      zip.writeZip(tempPath);
-
-      // Validate by re-reading the OPF from the written file
-      const validationZip = new AdmZip(tempPath);
+      const modifiedBuffer = zip.toBuffer();
+      const validationZip = new AdmZip(modifiedBuffer);
       const validatedOpf = validationZip.readAsText(opfPath);
       if (!validatedOpf || validatedOpf.length === 0) {
         throw new Error('Validation failed: written EPUB has empty OPF');
       }
 
       // Upload the modified file back to storage
-      const modifiedBuffer = validationZip.toBuffer();
       await this.storage.uploadFile(modifiedBuffer, {
         key: epubPath,
         mimeType: 'application/epub+zip',
@@ -45,10 +37,6 @@ export class EpubMetadataWriterService {
     } catch (err) {
       this.logger.error(`Failed to write metadata to EPUB: ${String(err)}`);
       throw err; // Re-throw the error to be handled by the caller
-    } finally {
-      if (existsSync(tempPath)) {
-        removeSync(tempPath);
-      }
     }
   }
 

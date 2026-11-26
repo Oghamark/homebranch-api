@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsArray, IsNumber, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 
 export class UpdateBookRequest {
   @IsUUID()
@@ -13,10 +13,13 @@ export class UpdateBookRequest {
   author?: string;
 
   @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
   genres?: string[];
 
   @IsOptional()
   @IsNumber()
+  @Min(1)
   publishedYear?: number;
 
   @IsOptional()
@@ -32,6 +35,7 @@ export class UpdateBookRequest {
 
   @IsOptional()
   @IsNumber()
+  @Min(0)
   seriesPosition?: number;
 
   @IsOptional()
@@ -48,6 +52,7 @@ export class UpdateBookRequest {
 
   @IsOptional()
   @IsNumber()
+  @Min(1)
   pageCount?: number;
 
   @IsOptional()
@@ -60,9 +65,12 @@ export class UpdateBookRequest {
 
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(5)
   averageRating?: number;
 
   @IsOptional()
   @IsNumber()
+  @Min(0)
   ratingsCount?: number;
 }

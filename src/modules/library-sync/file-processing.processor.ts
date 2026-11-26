@@ -51,7 +51,14 @@ export class FileProcessingProcessor extends WorkerHost {
         await this.processNewFile(job as Job<{ fileName: string; filePath: string }>);
         break;
       case 'sync-metadata':
-        await this.syncMetadata(job as Job<{ bookId: string; fileName: string; filePath: string }>);
+        await this.syncMetadata(
+          job as Job<{
+            bookId: string;
+            fileName: string;
+            filePath: string;
+            preferredDbFields?: (keyof SyncableMetadata)[];
+          }>,
+        );
         break;
       case 'soft-delete-book':
         await this.softDeleteBook(job as Job<{ bookId: string; fileName: string }>);
@@ -272,15 +279,22 @@ export class FileProcessingProcessor extends WorkerHost {
     }
   }
 
-  private async syncMetadata(job: Job<{ bookId: string; fileName: string; filePath: string }>) {
+  private async syncMetadata(
+    job: Job<{ bookId: string; fileName: string; filePath: string; preferredDbFields?: (keyof SyncableMetadata)[] }>,
+  ) {
     const { bookId, filePath } = job.data;
     this.logger.log(`Syncing metadata for book ${bookId}`);
     await job.updateProgress(10);
-    await this.performMetadataSync(bookId, filePath, job.data.fileName);
+    await this.performMetadataSync(bookId, filePath, job.data.fileName, job.data.preferredDbFields);
     await job.updateProgress(100);
   }
 
-  private async performMetadataSync(bookId: string, filePath: string, fileName: string): Promise<void> {
+  private async performMetadataSync(
+    bookId: string,
+    filePath: string,
+    fileName: string,
+    preferredDbFields?: (keyof SyncableMetadata)[],
+  ): Promise<void> {
     let book: Book;
     try {
       book = await this.bookPersistenceService.findBookById(bookId);
@@ -316,7 +330,7 @@ export class FileProcessingProcessor extends WorkerHost {
 
     const dbMetadata = SyncableMetadataHelper.fromBook(book);
     const lastSynced = (book.syncedMetadata as unknown as SyncableMetadata) || null;
-    const mergeResult = MetadataMerger.merge(fileMetadata, dbMetadata, lastSynced, this.logger);
+    const mergeResult = MetadataMerger.merge(fileMetadata, dbMetadata, lastSynced, this.logger, preferredDbFields);
 
     const stat = await this.storage.getFileStats(filePath);
     let finalMtime = stat.mtimeMs;
@@ -333,6 +347,7 @@ export class FileProcessingProcessor extends WorkerHost {
         this.logger.log(`Updated file metadata for "${book.title}"`);
       } catch (err) {
         this.logger.error(`Failed to write metadata to file: ${String(err)}`);
+        throw err;
       }
     }
 

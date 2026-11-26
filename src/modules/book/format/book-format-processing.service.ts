@@ -10,6 +10,8 @@ import { BookFormatType } from 'src/modules/book/format/book-format-type.enum';
 import { supportsBookFormatMetadataWrite } from 'src/modules/book/format/book-format';
 import { SyncableMetadata } from 'src/common/value-objects/syncable-metadata';
 import { EpubMetadataWriterService } from 'src/modules/book/format/epub-metadata-writer.service';
+import { PdfMetadataWriterService } from 'src/modules/book/format/pdf-metadata-writer.service';
+import { Mp3MetadataWriterService } from 'src/modules/book/format/mp3-metadata-writer.service';
 import { BookEntity } from 'src/modules/book/book.entity';
 import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
 import { AudioTrack } from 'src/modules/book/format/audio-track';
@@ -60,6 +62,8 @@ export class BookFormatProcessingService {
     private readonly pdfParser: PdfParserService,
     @Inject(STORAGE_SERVICE_TOKEN) private readonly storage: IStorageService,
     @Optional() private readonly epubMetadataWriter?: EpubMetadataWriterService,
+    @Optional() private readonly pdfMetadataWriter?: PdfMetadataWriterService,
+    @Optional() private readonly mp3MetadataWriter?: Mp3MetadataWriterService,
   ) {
     this.parsers = {
       [BookFormatType.EPUB]: this.epubParser,
@@ -67,6 +71,8 @@ export class BookFormatProcessingService {
     };
     this.metadataWriters = {
       [BookFormatType.EPUB]: this.epubMetadataWriter,
+      [BookFormatType.PDF]: this.pdfMetadataWriter,
+      [BookFormatType.MP3]: this.mp3MetadataWriter,
     };
   }
 

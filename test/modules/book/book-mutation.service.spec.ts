@@ -47,8 +47,73 @@ describe('BookMutationService', () => {
       mockBook.id,
       updatedBook.fileName,
       `books/${updatedBook.fileName}`,
-      { jobId: `sync-${mockBook.id}` },
+      { preferredDbFields: ['title'] },
     );
+  });
+
+  test('enqueues metadata sync for every linked format', async () => {
+    const epub = Object.assign(new BookFormatEntity(), {
+      id: 'epub',
+      format: BookFormatType.EPUB,
+      fileName: 'orchard.epub',
+    });
+    const pdf = Object.assign(new BookFormatEntity(), {
+      id: 'pdf',
+      format: BookFormatType.PDF,
+      fileName: 'orchard.pdf',
+    });
+    const updatedBook = { ...mockBook, title: 'Updated Title', formats: [epub, pdf] };
+    bookPersistenceService.findBookById.mockResolvedValueOnce(mockBook);
+    bookPersistenceService.updateBookRecord.mockResolvedValueOnce(updatedBook);
+
+    await service.updateBook({ id: mockBook.id, title: 'Updated Title' });
+
+    expect(fileProcessingQueue.enqueueMetadataSync).toHaveBeenCalledWith(
+      mockBook.id,
+      'orchard.epub',
+      'books/orchard.epub',
+      { preferredDbFields: ['title'] },
+    );
+    expect(fileProcessingQueue.enqueueMetadataSync).toHaveBeenCalledWith(
+      mockBook.id,
+      'orchard.pdf',
+      'books/orchard.pdf',
+      { preferredDbFields: ['title'] },
+    );
+  });
+
+  test('updates supplied metadata on each format and preserves the previous sync baseline', async () => {
+    const existing = new Book('book', 'Title', 'Author', 'book.epub', false, []);
+    existing.summary = 'test';
+    existing.formats = [
+      Object.assign(new BookFormatEntity(), {
+        id: 'epub',
+        fileName: 'book.epub',
+        summary: 'test',
+        title: 'Ebook title',
+      }),
+      Object.assign(new BookFormatEntity(), {
+        id: 'audio',
+        fileName: 'book.mp3',
+        summary: 'old',
+        title: 'Audio title',
+      }),
+    ];
+    bookPersistenceService.findBookById.mockResolvedValueOnce(existing);
+    bookPersistenceService.updateBookRecord.mockImplementation((_id, book) => Promise.resolve(book));
+
+    const updated = await service.updateBook({ id: existing.id, summary: 'test2' });
+
+    expect(updated.summary).toBe('test2');
+    expect(updated.formats).toEqual([
+      expect.objectContaining({ summary: 'test2', title: 'Ebook title' }),
+      expect.objectContaining({ summary: 'test2', title: 'Audio title' }),
+    ]);
+    expect(updated.syncedMetadata).toEqual(expect.objectContaining({ summary: 'test' }));
+    expect(existing.formats[0].summary).toBe('test');
+    expect(fileProcessingQueue.enqueueMetadataSync).toHaveBeenCalledWith('book', 'book.mp3', 'books/book.mp3', {
+      preferredDbFields: ['summary'],
+    });
   });
 
   test('links two books by merging formats and deleting the source', async () => {

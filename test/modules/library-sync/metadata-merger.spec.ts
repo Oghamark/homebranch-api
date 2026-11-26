@@ -32,6 +32,19 @@ describe('MetadataMerger', () => {
     expect(result.conflicts).toEqual([]);
   });
 
+  test.each([null, baseMetadata, { ...baseMetadata, summary: 'test2' }])(
+    'explicitly edited fields win over the file with snapshot %p',
+    (snapshot) => {
+      const file = { ...baseMetadata, summary: 'test' };
+      const db = { ...baseMetadata, summary: 'test2' };
+      const result = MetadataMerger.merge(file, db, snapshot, undefined, ['summary']);
+
+      expect(result.merged.summary).toBe('test2');
+      expect(result.fileUpdated).toBe(true);
+      expect(result.conflicts).not.toContain('summary');
+    },
+  );
+
   test('File-only change updates DB', () => {
     const fileMetadata = { ...baseMetadata, title: 'New File Title' };
 
