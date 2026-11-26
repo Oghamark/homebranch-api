@@ -1,6 +1,90 @@
 import { Brackets, Repository } from 'typeorm';
 import { BookEntity } from 'src/modules/book/book.entity';
-import { findGenres, findMatchingBooksForWork } from 'src/modules/book/persistence/book.persistence';
+import {
+  findBooks,
+  findGenres,
+  findMatchingBooksForWork,
+  searchBooksWithFilters,
+} from 'src/modules/book/persistence/book.persistence';
+
+describe('searchBooksWithFilters', () => {
+  test('applies advanced filters and whitelisted stable sorting before pagination', async () => {
+    const queryBuilder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+    };
+    const repository = {
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+    } as unknown as Repository<BookEntity>;
+    const formatRepository = {} as never;
+
+    await searchBooksWithFilters(
+      repository,
+      formatRepository,
+      {
+        genreFilter: 'Fantasy',
+        seriesFilter: 'Earthsea',
+        language: 'English',
+        publisher: 'Ace',
+        yearFrom: 1968,
+        yearTo: 1990,
+        sortBy: 'publishedYear',
+        sortDirection: 'DESC',
+      },
+      20,
+      40,
+      'user-1',
+    );
+
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith('LOWER(book.genres) LIKE LOWER(:genreFilter)', {
+      genreFilter: '%Fantasy%',
+    });
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith('LOWER(book.series) LIKE LOWER(:seriesFilter)', {
+      seriesFilter: '%Earthsea%',
+    });
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith('LOWER(book.language) LIKE LOWER(:language)', {
+      language: '%English%',
+    });
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith('LOWER(book.publisher) LIKE LOWER(:publisher)', {
+      publisher: '%Ace%',
+    });
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith('book.publishedYear >= :yearFrom', { yearFrom: 1968 });
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith('book.publishedYear <= :yearTo', { yearTo: 1990 });
+    expect(queryBuilder.orderBy).toHaveBeenCalledWith('book.publishedYear', 'DESC', 'NULLS LAST');
+    expect(queryBuilder.addOrderBy).toHaveBeenCalledWith('book.title', 'ASC');
+    expect(queryBuilder.addOrderBy).toHaveBeenCalledWith('book.author', 'ASC');
+    expect(queryBuilder.addOrderBy).toHaveBeenCalledWith('book.id', 'ASC');
+    expect(queryBuilder.limit).toHaveBeenCalledWith(20);
+    expect(queryBuilder.skip).toHaveBeenCalledWith(40);
+  });
+});
+
+describe('findBooks', () => {
+  test('defaults to stable title-ascending order', async () => {
+    const queryBuilder = {
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+    };
+    const repository = {
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+    } as unknown as Repository<BookEntity>;
+
+    await findBooks(repository, {} as never, 20, 0);
+
+    expect(queryBuilder.orderBy).toHaveBeenCalledWith('book.title', 'ASC', undefined);
+    expect(queryBuilder.addOrderBy).toHaveBeenCalledWith('book.author', 'ASC');
+    expect(queryBuilder.addOrderBy).toHaveBeenCalledWith('book.id', 'ASC');
+  });
+});
 
 describe('findGenres', () => {
   test('returns distinct, trimmed, sorted genres in the owner scope', async () => {

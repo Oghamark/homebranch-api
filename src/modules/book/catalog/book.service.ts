@@ -38,12 +38,49 @@ export class BookService {
     genre,
     series,
     author,
+    genreFilter,
+    seriesFilter,
+    language,
+    publisher,
+    yearFrom,
+    yearTo,
+    sortBy,
+    sortDirection,
   }: GetBooksRequest): Promise<PaginationResult<Book[]>> {
-    const hasFilters = query || isbn || genre || series || author;
+    if (yearFrom != null && yearTo != null && yearFrom > yearTo) {
+      throw new BadRequestException('Published year range start must not exceed its end');
+    }
+
+    const hasFilters =
+      query ||
+      isbn ||
+      genre ||
+      series ||
+      author ||
+      genreFilter ||
+      seriesFilter ||
+      language ||
+      publisher ||
+      yearFrom != null ||
+      yearTo != null;
 
     if (hasFilters) {
       return this.bookPersistenceService.searchBooksWithFilters(
-        { query, isbn, genre, series, author },
+        {
+          query,
+          isbn,
+          genre,
+          series,
+          author,
+          genreFilter,
+          seriesFilter,
+          language,
+          publisher,
+          yearFrom,
+          yearTo,
+          sortBy,
+          sortDirection,
+        },
         limit,
         offset,
         userId,
@@ -51,7 +88,7 @@ export class BookService {
       );
     }
 
-    return this.bookPersistenceService.findBooks(limit, offset, userId, viewerUserId);
+    return this.bookPersistenceService.findBooks(limit, offset, userId, viewerUserId, sortBy, sortDirection);
   }
 
   async getCurrentUserBooks(request: GetBooksRequest, currentUserId: string): Promise<PaginationResult<Book[]>> {
