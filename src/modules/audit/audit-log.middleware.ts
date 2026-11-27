@@ -4,7 +4,11 @@ import { AuditLogRecord, AuditLogService } from './audit-log.service';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MUTATIONS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-const READ_ONLY_POSTS = new Set(['/books/audiobook/preview', '/koreader/documents/resolve']);
+const READ_ONLY_POSTS = new Set([
+  '/books/audiobook/preview',
+  '/books/audiobook/preview-from-upload',
+  '/koreader/documents/resolve',
+]);
 
 type AuditRequest = Request & { syncActor?: { id: string; email?: string } };
 
@@ -21,6 +25,8 @@ export function buildAuditRecord(
   const download = method === 'GET' && route === '/books/:id/download' && !request.headers.range;
   if (!MUTATIONS.has(method) && !download) return;
   if (method === 'POST' && READ_ONLY_POSTS.has(route)) return;
+  // Chunk transfers are transport details; audit the final book action instead.
+  if (route === '/upload-sessions' || route.startsWith('/upload-sessions/')) return;
   if (method === 'PUT' && (route.includes('/saved-positions/') || route === '/koreader/syncs/progress')) return;
 
   const actor = request.user ?? request.syncActor;

@@ -18,6 +18,8 @@ import { BullModule } from '@nestjs/bullmq';
 import { BookShelvesModule } from 'src/modules/book-shelf/book-shelf.module';
 import { BulkBookController } from './bulk/bulk-book.controller';
 import { BulkBookService } from './bulk/bulk-book.service';
+import { UploadsModule } from '../uploads/uploads.module';
+import { UploadedBooksController } from './catalog/uploaded-books.controller';
 
 @Module({
   imports: [
@@ -27,6 +29,7 @@ import { BulkBookService } from './bulk/bulk-book.service';
     BookShelvesModule,
     BookPublicationModule,
     StorageModule,
+    UploadsModule,
     BullModule.registerQueue({ name: 'duplicate-scan' }),
   ],
   providers: [
@@ -39,6 +42,6 @@ import { BulkBookService } from './bulk/bulk-book.service';
     BookCreationService,
     BulkBookService,
   ],
-  controllers: [BulkBookController, BookDuplicateController, BookController],
+  controllers: [BulkBookController, BookDuplicateController, UploadedBooksController, BookController],
 })
 export class BooksModule {}
