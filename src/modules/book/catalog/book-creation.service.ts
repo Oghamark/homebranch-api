@@ -26,6 +26,7 @@ import { tmpdir } from 'os';
 import { StorageQuotaService } from 'src/modules/cloud/storage-quota.service';
 import { isCloudMode } from 'src/common/utils/cloud';
 import { AudioTrack } from 'src/modules/book/format/audio-track';
+import { AudioChapter } from 'src/modules/book/format/audio-chapter';
 
 export type CreateBookResponse = Book | { skipped: true; existingBook: Book };
 
@@ -74,13 +75,17 @@ export class BookCreationService {
 
     let parsedSummary: string | undefined;
     let extractedCoverFileName: string | undefined;
+    let audioChapters: AudioChapter[] | undefined;
     let fileMetadata: BookFileMetadata = {};
 
     try {
-      fileMetadata =
-        detectedFormat === BookFormatType.MP3
-          ? (await this.bookFormatProcessingService.parseAudioMetadata(dto.filePath)).bookMetadata
-          : await this.bookFormatProcessingService.parseMetadata(incomingPath, detectedFormat);
+      if (detectedFormat === BookFormatType.MP3 || detectedFormat === BookFormatType.M4B) {
+        const audioMetadata = await this.bookFormatProcessingService.parseAudioMetadata(dto.filePath);
+        fileMetadata = audioMetadata.bookMetadata;
+        audioChapters = audioMetadata.chapters;
+      } else {
+        fileMetadata = await this.bookFormatProcessingService.parseMetadata(incomingPath, detectedFormat);
+      }
 
       if (!enrichedDto.title && fileMetadata.title) enrichedDto.title = fileMetadata.title;
       if (!enrichedDto.author && fileMetadata.author) enrichedDto.author = fileMetadata.author;
@@ -126,13 +131,14 @@ export class BookCreationService {
 
     fillBookMetadataFromFileName(enrichedDto, originalFileName);
 
-    if (!enrichedDto.title) {
+    const missingFields = (['title', 'author'] as const).filter((field) => !enrichedDto[field]?.trim());
+    if (!enrichedDto.title || !enrichedDto.author || missingFields.length) {
       await this.deleteIncomingFiles(tempFileName, enrichedDto.coverImageFileName, extractedCoverFileName);
-      this.throwMissingMetadata('title');
-    }
-    if (!enrichedDto.author) {
-      await this.deleteIncomingFiles(tempFileName, enrichedDto.coverImageFileName, extractedCoverFileName);
-      this.throwMissingMetadata('author');
+      throw new BadRequestException({
+        message: `Could not determine ${missingFields.map((field) => `"${field}"`).join(' and ')} from the uploaded file. Please provide it manually.`,
+        missingFields,
+        metadata: { title: enrichedDto.title, author: enrichedDto.author },
+      });
     }
 
     const ownerScope = isCloudMode() ? enrichedDto.uploadedByUserId : undefined;
@@ -172,6 +178,7 @@ export class BookCreationService {
       fileName: finalFileName,
       fileContentHash: contentHash,
       fileSize,
+      audioChapters,
       ...buildBookFormatMetadata(fileMetadata, originalFileName, enrichedDto.coverImageFileName),
       externalWorkId: enrichedDto.externalWorkId ?? fileMetadata.externalWorkId,
       editionId: enrichedDto.editionId ?? fileMetadata.editionId,

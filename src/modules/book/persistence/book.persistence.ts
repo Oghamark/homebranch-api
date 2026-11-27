@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, IsNull, Repository, SelectQueryBuilder } from 'typeorm';
 import { PaginationResult } from 'src/common/core/pagination_result';
@@ -7,6 +7,7 @@ import { BookEntity } from 'src/modules/book/book.entity';
 import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
 import { UserBookFavoriteEntity } from 'src/modules/book/user-book-favorite.entity';
 import { BookFormatProcessingService } from 'src/modules/book/format/book-format-processing.service';
+import { getPreferredBookFormat } from 'src/modules/book/format/book-format';
 import { IStorageService, STORAGE_SERVICE_TOKEN } from '../../storage/storage.interface';
 
 export interface BookSearchFilters {
@@ -176,6 +177,23 @@ export class BookPersistenceService {
     return toggleBookFavorite(this.favoriteRepository, userId, bookId);
   }
 
+  async setBookFavorite(userId: string, bookId: string, favorite: boolean): Promise<void> {
+    if (favorite) {
+      await this.favoriteRepository.createQueryBuilder().insert().values({ userId, bookId }).orIgnore().execute();
+    } else {
+      await this.favoriteRepository.delete({ userId, bookId });
+    }
+  }
+
+  async setBookOwner(id: string, ownerId: string | null): Promise<Book> {
+    const result = await this.bookRepository.update(
+      { id, deletedAt: IsNull() },
+      { uploadedByUserId: ownerId === null ? () => 'NULL' : ownerId },
+    );
+    if (!result.affected) throw new NotFoundException('Book not found');
+    return this.findBookById(id);
+  }
+
   updateBookRecord(id: string, book: Book): Promise<Book> {
     return updateBookRecord(this.bookRepository, this.formatRepository, this.bookFormatProcessingService, id, book);
   }
@@ -193,6 +211,18 @@ export class BookPersistenceService {
 
   permanentDeleteBook(id: string): Promise<Book> {
     return permanentDeleteBook(this.bookRepository, id, this.storage);
+  }
+
+  deleteBookFormat(bookId: string, formatId: string, userId: string, isAdmin: boolean): Promise<Book> {
+    return deleteBookFormat(
+      this.bookRepository,
+      this.formatRepository,
+      this.storage,
+      bookId,
+      formatId,
+      userId,
+      isAdmin,
+    );
   }
 
   softDeleteBookRecord(id: string): Promise<Book> {
@@ -748,6 +778,64 @@ export async function permanentDeleteBook(
   }
   await storage.deleteFile(`cover-images/${book.coverImageFileName}`);
   await repository.delete(id);
+  return book;
+}
+
+export async function deleteBookFormat(
+  repository: Repository<BookEntity>,
+  formatRepository: Repository<BookFormatEntity>,
+  storage: IStorageService,
+  bookId: string,
+  formatId: string,
+  userId: string,
+  isAdmin: boolean,
+): Promise<Book> {
+  const { book, files } = await repository.manager.transaction(async (manager) => {
+    const books = manager.getRepository(BookEntity);
+    const formats = manager.getRepository(BookFormatEntity);
+    const book = await books.findOne({ where: { id: bookId }, lock: { mode: 'pessimistic_write' } });
+    if (!book) throw new NotFoundException('Book not found');
+    if (!isAdmin && book.uploadedByUserId !== userId) {
+      throw new ForbiddenException('Only an admin or the book owner can delete a format');
+    }
+
+    const bookFormats = await formats.find({ where: { bookId } });
+    const removed = bookFormats.find((format) => format.id === formatId);
+    if (!removed) throw new NotFoundException('The specified format was not found on this book');
+    if (bookFormats.length <= 1) throw new BadRequestException('Cannot delete the only format of a book');
+
+    const remaining = bookFormats.filter((format) => format.id !== formatId);
+    const preferred = getPreferredBookFormat(remaining)!;
+    await formats.delete({ id: formatId, bookId });
+    book.fileName = preferred.fileName;
+    book.fileMtime = preferred.fileMtime;
+    book.fileContentHash = preferred.fileContentHash;
+    book.metadataUpdatedAt = new Date();
+    await books.save(book);
+    book.formats = remaining;
+    return {
+      book: normalizeBookEntity(book),
+      files: [...new Set([removed.fileName, ...(removed.audioTracks?.map((track) => track.fileName) ?? [])])],
+    };
+  });
+
+  // Storage is not transactional: delete only after the database commits, and never
+  // remove a file still referenced by a format or a legacy book record.
+  for (const fileName of files.filter(Boolean)) {
+    try {
+      const referencedByFormat = await formatRepository
+        .createQueryBuilder('format')
+        .where('format.file_name = :fileName OR format.audio_tracks @> CAST(:track AS jsonb)', {
+          fileName,
+          track: JSON.stringify([{ fileName }]),
+        })
+        .getExists();
+      const referencedByBook = await repository.exists({ where: { fileName } });
+      if (!referencedByFormat && !referencedByBook) await storage.deleteFile(`books/${fileName}`);
+    } catch (error) {
+      new Logger('BookPersistenceService').error(`Could not clean up removed format file ${fileName}`, error);
+    }
+  }
   return book;
 }
 
