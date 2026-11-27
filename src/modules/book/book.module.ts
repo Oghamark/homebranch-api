@@ -15,12 +15,16 @@ import { DuplicateScanQueueService } from './deduplication/duplicate-scan-queue.
 import { DuplicateScanSchedulerService } from './deduplication/duplicate-scan-scheduler.service';
 import { DuplicateScanProcessor } from './deduplication/duplicate-scan.processor';
 import { BullModule } from '@nestjs/bullmq';
+import { BookShelvesModule } from 'src/modules/book-shelf/book-shelf.module';
+import { BulkBookController } from './bulk/bulk-book.controller';
+import { BulkBookService } from './bulk/bulk-book.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([BookDuplicateEntity]),
     AuthModule,
     BookCoreModule,
+    BookShelvesModule,
     BookPublicationModule,
     StorageModule,
     BullModule.registerQueue({ name: 'duplicate-scan' }),
@@ -33,7 +37,8 @@ import { BullModule } from '@nestjs/bullmq';
     DuplicateScanSchedulerService,
     DuplicateScanProcessor,
     BookCreationService,
+    BulkBookService,
   ],
-  controllers: [BookDuplicateController, BookController],
+  controllers: [BulkBookController, BookDuplicateController, BookController],
 })
 export class BooksModule {}

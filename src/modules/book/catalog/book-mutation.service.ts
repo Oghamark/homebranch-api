@@ -223,6 +223,15 @@ export class BookMutationService {
     return this.bookPersistenceService.splitBookFormatRecord(book.id, updatedBook, splitBook);
   }
 
+  async deleteBookFormat(request: UnlinkBookFormatRequest): Promise<Book> {
+    return this.bookPersistenceService.deleteBookFormat(
+      request.bookId,
+      request.formatId,
+      request.requestingUserId,
+      request.requestingUserRole === 'ADMIN',
+    );
+  }
+
   private async buildSplitBook(book: Book, format: BookFormatEntity): Promise<Book> {
     const fileMetadata = await this.parseFileMetadata(format);
     const coverImageFileName = await this.extractCoverImage(fileMetadata);

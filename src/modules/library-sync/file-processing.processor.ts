@@ -7,6 +7,8 @@ import { BookFileMetadata } from 'src/modules/book/format/book-file-metadata.int
 import { Book, copyBook } from 'src/modules/book/book.model';
 import { ContentHashService } from 'src/modules/book/format/content-hash.service';
 import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
+import { BookFormatType } from 'src/modules/book/format/book-format-type.enum';
+import { AudioChapter } from 'src/modules/book/format/audio-chapter';
 import {
   detectBookFormatFromFileName,
   getAvailableBookFormatsFromBook,
@@ -138,7 +140,8 @@ export class FileProcessingProcessor extends WorkerHost {
     // New book or new format — parse file metadata
     await job.updateProgress(40);
 
-    const fileMetadata = await this.parseBookFileMetadata(filePath, fileName);
+    const parsedFile = await this.parseBookFileMetadata(filePath, fileName);
+    const fileMetadata = parsedFile.bookMetadata;
     const seededFileMetadata = fillBookMetadataFromFileName({ ...fileMetadata }, fileName);
     const title = seededFileMetadata.title ?? basename(fileName, extname(fileName));
     const author = seededFileMetadata.author ?? 'Unknown Author';
@@ -167,6 +170,7 @@ export class FileProcessingProcessor extends WorkerHost {
       fileName,
       fileMtime: stat.mtimeMs,
       fileContentHash: contentHash,
+      audioChapters: parsedFile.audioChapters,
       ...formatMetadata,
     });
     const id = randomUUID();
@@ -309,8 +313,11 @@ export class FileProcessingProcessor extends WorkerHost {
     }
 
     let fileMetadata: SyncableMetadata;
+    let audioChapters: AudioChapter[] | undefined;
     try {
-      const parsedMetadata = await this.parseBookFileMetadata(filePath, fileName);
+      const parsedFile = await this.parseBookFileMetadata(filePath, fileName);
+      const parsedMetadata = parsedFile.bookMetadata;
+      audioChapters = parsedFile.audioChapters;
       fileMetadata = SyncableMetadataHelper.fromBook({
         title: parsedMetadata.title || book.title,
         author: parsedMetadata.author || book.author,
@@ -361,7 +368,7 @@ export class FileProcessingProcessor extends WorkerHost {
       });
       await this.bookPersistenceService.updateBookRecord(
         bookId,
-        this.withUpdatedFormatState(updatedBook, fileName, {
+        this.withUpdatedFormatState(this.withAudioChapters(updatedBook, fileName, audioChapters), fileName, {
           fileMtime: finalMtime,
           fileContentHash: finalHash,
         }),
@@ -376,7 +383,10 @@ export class FileProcessingProcessor extends WorkerHost {
         fileMtime: finalMtime,
         fileContentHash: finalHash,
       });
-      await this.bookPersistenceService.updateBookRecord(bookId, updatedBook);
+      await this.bookPersistenceService.updateBookRecord(
+        bookId,
+        this.withAudioChapters(updatedBook, fileName, audioChapters),
+      );
     }
   }
 
@@ -463,10 +473,28 @@ export class FileProcessingProcessor extends WorkerHost {
     return settingValue?.trim() || undefined;
   }
 
-  private async parseBookFileMetadata(filePath: string, fileName: string): Promise<BookFileMetadata> {
+  private async parseBookFileMetadata(
+    filePath: string,
+    fileName: string,
+  ): Promise<{ bookMetadata: BookFileMetadata; audioChapters?: AudioChapter[] }> {
     const detectedFormat = detectBookFormatFromFileName(fileName);
-    if (!detectedFormat) return {};
-    return this.bookFormatProcessingService.parseMetadata(filePath, detectedFormat);
+    if (!detectedFormat) return { bookMetadata: {} };
+    if (detectedFormat === BookFormatType.MP3 || detectedFormat === BookFormatType.M4B) {
+      const parsedAudio = await this.bookFormatProcessingService.parseAudioMetadata(filePath);
+      return { bookMetadata: parsedAudio.bookMetadata, audioChapters: parsedAudio.chapters };
+    }
+    return { bookMetadata: await this.bookFormatProcessingService.parseMetadata(filePath, detectedFormat) };
+  }
+
+  private withAudioChapters(book: Book, fileName: string, chapters?: AudioChapter[]): Book {
+    if (!chapters) return book;
+    const formats = getAvailableBookFormatsFromBook(book).map((format) => {
+      if (format.fileName !== fileName) return format;
+      return cloneBookFormat(format, {
+        audioChapters: format.audioTracks && format.audioTracks.length > 1 ? [] : chapters,
+      });
+    });
+    return copyBook(book, { formats });
   }
 
   private async findMatchingBook(title: string, author: string, isbn?: string): Promise<Book | null> {

@@ -1,7 +1,9 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
-import { join } from 'path';
+import { open } from 'fs/promises';
+import { extname, join } from 'path';
+import { Readable } from 'stream';
 import { Repository } from 'typeorm';
 import { BookFileMetadata } from 'src/modules/book/format/book-file-metadata.interface';
 import { EpubParserService } from 'src/modules/book/format/epub-parser.service';
@@ -15,12 +17,15 @@ import { Mp3MetadataWriterService } from 'src/modules/book/format/mp3-metadata-w
 import { BookEntity } from 'src/modules/book/book.entity';
 import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
 import { AudioTrack } from 'src/modules/book/format/audio-track';
+import { AudioChapter } from 'src/modules/book/format/audio-chapter';
 import { buildBookFormatMetadata, hasStoredFormatMetadata } from 'src/modules/book/format/book-format-metadata';
 import { IStorageService, STORAGE_SERVICE_TOKEN } from '../../storage/storage.interface';
-import { parseFile } from 'music-metadata';
+import { parseFile, parseStream } from 'music-metadata';
+import { parseMp4Chapters } from './mp4-chapters';
 
 export interface ParsedAudioMetadata {
   bookMetadata: BookFileMetadata;
+  chapters: AudioChapter[];
   albumTitle?: string;
   albumArtist?: string;
   trackTitle?: string;
@@ -77,16 +82,82 @@ export class BookFormatProcessingService {
   }
 
   async parseMetadata(key: string, format: BookFormatType): Promise<BookFileMetadata> {
+    if (format === BookFormatType.MP3 || format === BookFormatType.M4B) {
+      return (await this.parseStoredAudioMetadata(key, false)).bookMetadata;
+    }
     const parser = this.parsers[format];
     return parser ? parser.parse(key) : {};
   }
 
   async parseAudioMetadata(filePath: string, skipCovers = false): Promise<ParsedAudioMetadata> {
-    const { common } = await parseFile(filePath, { skipCovers });
+    const metadata = await parseFile(filePath, { skipCovers, includeChapters: true });
+    const parsed = this.toParsedAudioMetadata(metadata);
+    if (!parsed.chapters.length && extname(filePath).toLowerCase() === '.m4b') {
+      const file = await open(filePath, 'r');
+      try {
+        const { size } = await file.stat();
+        parsed.chapters = await parseMp4Chapters(async (offset, length) => {
+          const buffer = Buffer.alloc(length);
+          const { bytesRead } = await file.read(buffer, 0, length, offset);
+          return buffer.subarray(0, bytesRead);
+        }, size);
+      } finally {
+        await file.close();
+      }
+    }
+    return parsed;
+  }
+
+  private async parseStoredAudioMetadata(key: string, skipCovers = true): Promise<ParsedAudioMetadata> {
+    const { stream, mimeType, size } = await this.storage.getFileStream(key);
+    const parsed = await this.parseAudioMetadataStream(stream, { path: key, mimeType }, skipCovers);
+    if (!parsed.chapters.length && extname(key).toLowerCase() === '.m4b') {
+      parsed.chapters = await parseMp4Chapters(async (offset, length) => {
+        const { stream: rangeStream } = await this.storage.getFileStream(key, {
+          start: offset,
+          end: offset + length - 1,
+        });
+        const chunks: Buffer[] = [];
+        let bytesRead = 0;
+        for await (const chunk of rangeStream) {
+          if (!Buffer.isBuffer(chunk)) throw new Error('Unexpected MP4 chapter stream encoding');
+          bytesRead += chunk.length;
+          if (bytesRead > length) throw new Error('Storage did not honor the MP4 chapter byte range');
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks);
+      }, size);
+    }
+    return parsed;
+  }
+
+  async parseAudioMetadataStream(
+    stream: Readable,
+    fileInfo: { path: string; mimeType: string },
+    skipCovers = true,
+  ): Promise<ParsedAudioMetadata> {
+    const metadata = await parseStream(stream, fileInfo, { skipCovers, includeChapters: true });
+    return this.toParsedAudioMetadata(metadata);
+  }
+
+  private toParsedAudioMetadata({ common, format }: Awaited<ReturnType<typeof parseFile>>): ParsedAudioMetadata {
     const picture = common.picture?.[0];
     const description = common.comment?.[0]?.text ?? common.description?.[0];
+    const sampleRate = format.sampleRate;
+    const chapters =
+      sampleRate && Number.isFinite(sampleRate) && sampleRate > 0
+        ? (format.chapters ?? [])
+            .filter((chapter) => Number.isFinite(chapter.sampleOffset) && chapter.sampleOffset >= 0)
+            .map((chapter, index) => ({
+              title: chapter.title?.trim() || `Chapter ${index + 1}`,
+              startTime: chapter.sampleOffset / sampleRate,
+            }))
+            .filter((chapter) => Number.isFinite(chapter.startTime))
+            .sort((left, right) => left.startTime - right.startTime)
+        : [];
 
     return {
+      chapters,
       albumTitle: common.album,
       albumArtist: common.albumartist ?? common.artist,
       trackTitle: common.title,
@@ -160,7 +231,10 @@ export class BookFormatProcessingService {
   }
 
   async updateAudioTracks(bookId: string, tracks: AudioTrack[]): Promise<void> {
-    await this.formatRepository.update({ bookId, format: BookFormatType.MP3 }, { audioTracks: tracks });
+    await this.formatRepository.update(
+      { bookId, format: BookFormatType.MP3 },
+      { audioTracks: tracks, audioChapters: [] },
+    );
   }
 
   canWriteMetadata(format: BookFormatType): boolean {
@@ -179,7 +253,11 @@ export class BookFormatProcessingService {
   async hydrateStoredFormatMetadata(bookEntity: BookEntity): Promise<BookEntity> {
     const formats = bookEntity.formats ?? [];
     const missingFormats = formats.filter((format) => !hasStoredFormatMetadata(format));
-    if (missingFormats.length === 0) {
+    const formatsMissingChapters = formats.filter(
+      (format) =>
+        (format.format === BookFormatType.MP3 || format.format === BookFormatType.M4B) && format.audioChapters == null,
+    );
+    if (missingFormats.length === 0 && formatsMissingChapters.length === 0) {
       return bookEntity;
     }
 
@@ -207,11 +285,26 @@ export class BookFormatProcessingService {
       hasUpdates = true;
     }
 
+    for (const format of formatsMissingChapters) {
+      if (format.audioTracks && format.audioTracks.length > 1) {
+        format.audioChapters = [];
+        hasUpdates = true;
+        continue;
+      }
+      try {
+        const { chapters } = await this.parseStoredAudioMetadata(join('books', format.fileName));
+        format.audioChapters = chapters;
+        hasUpdates = true;
+      } catch (error) {
+        this.logger.warn(`Could not parse audio chapters for "${format.fileName}": ${String(error)}`);
+      }
+    }
+
     if (!hasUpdates) {
       return bookEntity;
     }
 
-    await this.formatRepository.save(missingFormats);
+    await this.formatRepository.save([...new Set([...missingFormats, ...formatsMissingChapters])]);
     return (
       (await this.bookRepository.findOne({
         where: { id: bookEntity.id },

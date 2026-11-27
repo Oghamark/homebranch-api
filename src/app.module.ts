@@ -24,6 +24,7 @@ import { BookClubsModule } from 'src/modules/book-clubs/book-clubs.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { SocialModule } from './modules/social/social.module';
 import { KoreaderModule } from './modules/koreader/koreader.module';
+import { AuditLogModule } from './modules/audit/audit-log.module';
 
 @Module({
   imports: [
@@ -61,6 +62,7 @@ import { KoreaderModule } from './modules/koreader/koreader.module';
     BookClubsModule,
     SocialModule,
     KoreaderModule,
+    AuditLogModule,
   ],
   controllers: [],
   providers: [

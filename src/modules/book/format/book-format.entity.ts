@@ -1,5 +1,6 @@
 import { BookFormatType } from 'src/modules/book/format/book-format-type.enum';
 import { AudioTrack } from 'src/modules/book/format/audio-track';
+import { AudioChapter } from 'src/modules/book/format/audio-chapter';
 import { BookEntity } from 'src/modules/book/book.entity';
 import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique } from 'typeorm';
 
@@ -50,6 +51,9 @@ export class BookFormatEntity {
 
   @Column({ name: 'audio_tracks', type: 'jsonb', nullable: true })
   audioTracks?: AudioTrack[];
+
+  @Column({ name: 'audio_chapters', type: 'jsonb', nullable: true })
+  audioChapters?: AudioChapter[];
 
   @Column({ nullable: true })
   title?: string;
