@@ -159,6 +159,12 @@ describe('audit record selection', () => {
     expect(record('/books/:id', 'GET')).toBeUndefined();
     expect(buildAuditRecord({ method: 'POST' } as Request, 404)).toBeUndefined();
     expect(record('/books/audiobook/preview', 'POST')).toBeUndefined();
+    expect(record('/books/audiobook/preview-from-upload', 'POST')).toBeUndefined();
+    expect(record('/upload-sessions', 'POST')).toBeUndefined();
+    expect(record('/upload-sessions/:uploadId/files/:fileIndex/chunks/:chunkIndex', 'PUT')).toBeUndefined();
+    expect(record('/upload-sessions/:uploadId', 'DELETE')).toBeUndefined();
+    expect(record('/books/from-upload', 'POST')).toBeDefined();
+    expect(record('/books/audiobook/from-upload', 'POST')).toBeDefined();
     expect(record('/users/:userId/saved-positions/:bookId', 'PUT')).toBeUndefined();
     expect(record('/koreader/syncs/progress', 'PUT')).toBeUndefined();
     expect(record('/books/:id/download', 'GET')).toBeDefined();
