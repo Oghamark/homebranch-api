@@ -133,6 +133,31 @@ describe('BookCreationService', () => {
     expect(bookPersistenceService.updateBookRecord).toHaveBeenCalled();
   });
 
+  test('returns all missing required fields and keeps extracted metadata for correction', async () => {
+    bookFormatProcessingService.parseMetadata.mockResolvedValue({ title: 'Embedded title' });
+    await expect(
+      service.createBook({
+        filePath: '/tmp/uploads/book.epub',
+        uploadedByUserId: 'user-123',
+      }),
+    ).rejects.toMatchObject({
+      response: {
+        missingFields: ['author'],
+        metadata: { title: 'Embedded title' },
+      },
+    });
+    expect(storage.deleteFile).toHaveBeenCalledWith(expect.stringContaining('incoming/'));
+    expect(bookPersistenceService.createBookRecord).not.toHaveBeenCalled();
+
+    bookFormatProcessingService.parseMetadata.mockResolvedValue({ title: ' ', author: ' ' });
+    await expect(
+      service.createBook({
+        filePath: '/tmp/uploads/book.epub',
+        uploadedByUserId: 'user-123',
+      }),
+    ).rejects.toMatchObject({ response: { missingFields: ['title', 'author'] } });
+  });
+
   test('uses embedded MP3 metadata when creating a single-track audiobook', async () => {
     bookFormatProcessingService.parseAudioMetadata.mockResolvedValue({
       albumTitle: 'Tagged Album',
@@ -145,6 +170,7 @@ describe('BookCreationService', () => {
         coverImageBuffer: Buffer.from('cover'),
         coverImageMimeType: 'image/jpeg',
       },
+      chapters: [{ title: 'Opening', startTime: 0 }],
     });
     bookPersistenceService.createBookRecord.mockResolvedValueOnce(mockBook);
 
@@ -160,6 +186,7 @@ describe('BookCreationService', () => {
         author: 'Tagged Artist',
         publishedYear: 2022,
         genres: ['Fiction'],
+        formats: [expect.objectContaining({ audioChapters: [{ title: 'Opening', startTime: 0 }] })],
       }),
     );
     expect(storage.uploadFile).toHaveBeenCalledWith(

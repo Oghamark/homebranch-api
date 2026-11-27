@@ -162,11 +162,7 @@ export class BookService {
 
   async assignBookOwner(id: string, ownerId: string | null, isAdmin: boolean): Promise<Book> {
     this.ensureAdmin(isAdmin);
-
-    const book = await this.bookPersistenceService.findBookById(id);
-    book.uploadedByUserId = ownerId ?? undefined;
-
-    return this.bookPersistenceService.updateBookRecord(book.id, book);
+    return this.bookPersistenceService.setBookOwner(id, ownerId);
   }
 
   async bulkAssignBookOwner(bookIds: string[], ownerId: string | null, isAdmin: boolean) {

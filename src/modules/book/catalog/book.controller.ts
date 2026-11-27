@@ -359,6 +359,22 @@ export class BookController {
     });
   }
 
+  @Delete(':id/formats/:formatId/file')
+  @UseGuards(JwtAuthGuard)
+  async deleteBookFormat(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('formatId', ParseUUIDPipe) formatId: string,
+    @CurrentUser() currentUser: Express.User,
+  ) {
+    await this.bookService.assertAccess(id, tenantScope(currentUser));
+    return this.bookMutationService.deleteBookFormat({
+      bookId: id,
+      formatId,
+      requestingUserId: currentUser.id,
+      requestingUserRole: currentUser.roles?.includes('ADMIN') ? 'ADMIN' : 'USER',
+    });
+  }
+
   @Post(':id/fetch-metadata')
   @UseGuards(JwtAuthGuard)
   async fetchBookMetadata(@Param('id') id: string, @CurrentUser() currentUser: Express.User) {

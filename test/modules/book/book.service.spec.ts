@@ -24,6 +24,7 @@ describe('BookService', () => {
       findBookById: jest.fn(),
       toggleBookFavorite: jest.fn(),
       permanentDeleteBook: jest.fn(),
+      setBookOwner: jest.fn(),
       updateBookRecord: jest.fn(),
       findNewArrivals: jest.fn(),
     } as unknown as jest.Mocked<BookPersistenceService>;
@@ -170,10 +171,10 @@ describe('BookService', () => {
 
   test('assigns a book owner for an admin', async () => {
     const updatedBook = { ...mockBook, uploadedByUserId: 'user-999' };
-    bookPersistenceService.findBookById.mockResolvedValueOnce(mockBook);
-    bookPersistenceService.updateBookRecord.mockResolvedValueOnce(updatedBook);
+    bookPersistenceService.setBookOwner.mockResolvedValueOnce(updatedBook);
 
     await expect(service.assignBookOwner(mockBook.id, 'user-999', true)).resolves.toEqual(updatedBook);
+    expect(bookPersistenceService.setBookOwner).toHaveBeenCalledWith(mockBook.id, 'user-999');
   });
 
   test('enriches and persists metadata', async () => {
