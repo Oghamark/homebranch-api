@@ -31,12 +31,26 @@ export class MetadataMerger {
     dbMetadata: SyncableMetadata,
     lastSynced: SyncableMetadata | null,
     logger?: MetadataMergeLogger,
+    preferredDbFields: (keyof SyncableMetadata)[] = [],
   ): MergeResult {
     if (!lastSynced) {
+      const merged = { ...fileMetadata };
+      let fileUpdated = false;
+      for (const field of preferredDbFields) {
+        MetadataMerger.setField(merged, field, dbMetadata[field]);
+        if (
+          !MetadataMerger.valuesEqual(
+            MetadataMerger.normalize(fileMetadata[field]),
+            MetadataMerger.normalize(dbMetadata[field]),
+          )
+        ) {
+          fileUpdated = true;
+        }
+      }
       return {
-        merged: { ...fileMetadata },
+        merged,
         dbUpdated: true,
-        fileUpdated: false,
+        fileUpdated,
         conflicts: [],
       };
     }
@@ -50,6 +64,12 @@ export class MetadataMerger {
       const fileVal = MetadataMerger.normalize(fileMetadata[field]);
       const dbVal = MetadataMerger.normalize(dbMetadata[field]);
       const syncedVal = MetadataMerger.normalize(lastSynced[field]);
+
+      if (preferredDbFields.includes(field)) {
+        MetadataMerger.setField(merged, field, dbMetadata[field]);
+        if (!MetadataMerger.valuesEqual(fileVal, dbVal)) fileUpdated = true;
+        continue;
+      }
 
       const fileChanged = !MetadataMerger.valuesEqual(fileVal, syncedVal);
       const dbChanged = !MetadataMerger.valuesEqual(dbVal, syncedVal);

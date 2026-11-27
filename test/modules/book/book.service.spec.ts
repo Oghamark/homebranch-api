@@ -56,8 +56,42 @@ describe('BookService', () => {
     bookPersistenceService.searchBooksWithFilters.mockResolvedValueOnce(paginationResult);
 
     await expect(
-      service.getBooks({ query: 'Test', limit: 10, offset: 5, userId: 'user-1', viewerUserId: 'viewer-1' }),
+      service.getBooks({
+        query: 'Test',
+        limit: 10,
+        offset: 5,
+        userId: 'user-1',
+        viewerUserId: 'viewer-1',
+        yearFrom: 1980,
+        yearTo: 1990,
+        genreFilter: 'Fantasy',
+        sortBy: 'publishedYear',
+        sortDirection: 'DESC',
+      }),
     ).resolves.toEqual(paginationResult);
+
+    expect(bookPersistenceService.searchBooksWithFilters).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: 'Test',
+        yearFrom: 1980,
+        yearTo: 1990,
+        genreFilter: 'Fantasy',
+        sortBy: 'publishedYear',
+        sortDirection: 'DESC',
+      }),
+      10,
+      5,
+      'user-1',
+      'viewer-1',
+    );
+  });
+
+  test('rejects a published-year range whose start is after its end', async () => {
+    await expect(service.getBooks({ yearFrom: 2000, yearTo: 1990 })).rejects.toThrow(
+      'Published year range start must not exceed its end',
+    );
+    expect(bookPersistenceService.searchBooksWithFilters).not.toHaveBeenCalled();
+    expect(bookPersistenceService.findBooks).not.toHaveBeenCalled();
   });
 
   test('lists only the authenticated users books while preserving filters and pagination', async () => {

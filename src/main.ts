@@ -1,5 +1,6 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from 'src/app.module';
 import { DomainExceptionFilter } from 'src/common/filters/domain-exception.filter';
 import { existsSync, mkdirSync } from 'fs';
@@ -8,10 +9,16 @@ import * as cookieParser from 'cookie-parser';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ['error', 'warn', 'log'],
     cors: { origin: process.env.CORS_ORIGIN, credentials: true },
   });
+
+  const proxyHops = process.env.TRUST_PROXY_HOPS;
+  if (proxyHops !== undefined) {
+    if (!/^[1-9]\d*$/.test(proxyHops)) throw new Error('TRUST_PROXY_HOPS must be a positive integer');
+    app.set('trust proxy', Number(proxyHops));
+  }
 
   app.useGlobalFilters(new DomainExceptionFilter());
   app.useGlobalPipes(new ValidationPipe({ stopAtFirstError: true, transform: true }));

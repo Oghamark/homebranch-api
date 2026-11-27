@@ -6,6 +6,8 @@ import { BookFormatProcessingService } from 'src/modules/book/format/book-format
 import { EpubParserService } from 'src/modules/book/format/epub-parser.service';
 import { EpubMetadataWriterService } from 'src/modules/book/format/epub-metadata-writer.service';
 import { PdfParserService } from 'src/modules/book/format/pdf-parser.service';
+import { PdfMetadataWriterService } from 'src/modules/book/format/pdf-metadata-writer.service';
+import { Mp3MetadataWriterService } from 'src/modules/book/format/mp3-metadata-writer.service';
 import { ContentHashService } from 'src/modules/book/format/content-hash.service';
 import { StorageModule } from '../../storage/storage.module';
 
@@ -15,6 +17,8 @@ import { StorageModule } from '../../storage/storage.module';
     EpubParserService,
     PdfParserService,
     EpubMetadataWriterService,
+    PdfMetadataWriterService,
+    Mp3MetadataWriterService,
     BookFormatProcessingService,
     ContentHashService,
   ],

@@ -15,6 +15,14 @@ export interface BookSearchFilters {
   genre?: string;
   series?: string;
   author?: string;
+  genreFilter?: string;
+  seriesFilter?: string;
+  language?: string;
+  publisher?: string;
+  yearFrom?: number;
+  yearTo?: number;
+  sortBy?: 'title' | 'author' | 'publishedYear';
+  sortDirection?: 'ASC' | 'DESC';
 }
 
 export interface WorkBookIdentifiers {
@@ -51,6 +59,8 @@ export class BookPersistenceService {
     offset?: number,
     userId?: string,
     viewerUserId?: string,
+    sortBy?: BookSearchFilters['sortBy'],
+    sortDirection?: BookSearchFilters['sortDirection'],
   ): Promise<PaginationResult<Book[]>> {
     return findBooks(
       this.bookRepository,
@@ -60,6 +70,8 @@ export class BookPersistenceService {
       userId,
       viewerUserId,
       this.favoriteRepository,
+      sortBy,
+      sortDirection,
     );
   }
 
@@ -217,13 +229,15 @@ export async function findBooks(
   userId?: string,
   viewerUserId?: string,
   favoriteRepository?: Repository<UserBookFavoriteEntity>,
+  sortBy: BookSearchFilters['sortBy'] = 'title',
+  sortDirection: BookSearchFilters['sortDirection'] = 'ASC',
 ): Promise<PaginationResult<Book[]>> {
-  const [bookEntities, total] = await repository.findAndCount({
-    where: userId ? { uploadedByUserId: userId, deletedAt: IsNull() } : { deletedAt: IsNull() },
-    order: { author: 'ASC', title: 'ASC' },
-    take: limit,
-    skip: offset,
-  });
+  const qb = repository.createQueryBuilder('book').where('book.deletedAt IS NULL');
+  if (userId) {
+    qb.andWhere('book.uploadedByUserId = :userId', { userId });
+  }
+  applyBookSort(qb, sortBy, sortDirection);
+  const [bookEntities, total] = await qb.take(limit).skip(offset).getManyAndCount();
 
   const books = normalizeBookEntities(await attachBookFormats(formatRepository, bookEntities));
   if (viewerUserId && favoriteRepository) {
@@ -323,12 +337,8 @@ export async function searchBooksWithFilters(
   if (userId) {
     qb.andWhere('book.uploadedByUserId = :userId', { userId });
   }
-  const [bookEntities, total] = await qb
-    .orderBy('book.author', 'ASC')
-    .addOrderBy('book.title', 'ASC')
-    .limit(limit)
-    .skip(offset)
-    .getManyAndCount();
+  applyBookSort(qb, filters.sortBy, filters.sortDirection);
+  const [bookEntities, total] = await qb.limit(limit).skip(offset).getManyAndCount();
   const books = normalizeBookEntities(await attachBookFormats(formatRepository, bookEntities));
   if (viewerUserId && favoriteRepository) {
     await applyFavoriteStatus(favoriteRepository, books, viewerUserId);
@@ -864,9 +874,48 @@ function applySearchFilters(qb: SelectQueryBuilder<BookEntity>, filters: BookSea
   if (filters.series) {
     qb.andWhere('LOWER(book.series) LIKE LOWER(:series)', { series: `%${filters.series}%` });
   }
+  if (filters.genreFilter) {
+    qb.andWhere('LOWER(book.genres) LIKE LOWER(:genreFilter)', { genreFilter: `%${filters.genreFilter}%` });
+  }
+  if (filters.seriesFilter) {
+    qb.andWhere('LOWER(book.series) LIKE LOWER(:seriesFilter)', { seriesFilter: `%${filters.seriesFilter}%` });
+  }
   if (filters.author) {
     qb.andWhere('LOWER(book.author) LIKE LOWER(:author)', { author: `%${filters.author}%` });
   }
+  if (filters.language) {
+    qb.andWhere('LOWER(book.language) LIKE LOWER(:language)', { language: `%${filters.language}%` });
+  }
+  if (filters.publisher) {
+    qb.andWhere('LOWER(book.publisher) LIKE LOWER(:publisher)', { publisher: `%${filters.publisher}%` });
+  }
+  if (filters.yearFrom != null) {
+    qb.andWhere('book.publishedYear >= :yearFrom', { yearFrom: filters.yearFrom });
+  }
+  if (filters.yearTo != null) {
+    qb.andWhere('book.publishedYear <= :yearTo', { yearTo: filters.yearTo });
+  }
+}
+
+function applyBookSort(
+  qb: SelectQueryBuilder<BookEntity>,
+  sortBy: BookSearchFilters['sortBy'] = 'title',
+  sortDirection: BookSearchFilters['sortDirection'] = 'ASC',
+): void {
+  const sortColumns = {
+    title: 'book.title',
+    author: 'book.author',
+    publishedYear: 'book.publishedYear',
+  } as const;
+  const column = sortColumns[sortBy ?? 'title'];
+  qb.orderBy(column, sortDirection ?? 'ASC', sortBy === 'publishedYear' ? 'NULLS LAST' : undefined);
+  if (sortBy !== 'title') {
+    qb.addOrderBy('book.title', 'ASC');
+  }
+  if (sortBy !== 'author') {
+    qb.addOrderBy('book.author', 'ASC');
+  }
+  qb.addOrderBy('book.id', 'ASC');
 }
 
 function normalizeSearchMetadata(value: string): string {

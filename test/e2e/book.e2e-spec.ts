@@ -25,6 +25,7 @@ describe('BookController (e2e)', () => {
     getBookById: jest.fn(),
     toggleFavorite: jest.fn(),
     deleteBook: jest.fn(),
+    assertAccess: jest.fn(),
     assignBookOwner: jest.fn(),
     bulkAssignBookOwner: jest.fn(),
     fetchBookMetadata: jest.fn(),
@@ -214,5 +215,33 @@ describe('BookController (e2e)', () => {
 
     expect(response.body.id).toBe(mockBook.id);
     expect(mockBookService.fetchBookMetadata).toHaveBeenCalledWith(mockBook.id);
+  });
+
+  test('updates editable book metadata', async () => {
+    mockBookService.assertAccess.mockResolvedValueOnce(undefined);
+    mockBookMutationService.updateBook.mockResolvedValueOnce({
+      ...mockBook,
+      title: 'A Better Orchard',
+      genres: ['Fiction', 'Mystery'],
+    });
+
+    const response = await request(app.getHttpServer())
+      .put(`/books/${mockBook.id}`)
+      .send({
+        title: 'A Better Orchard',
+        author: mockBook.author,
+        genres: ['Fiction', 'Mystery'],
+        publishedYear: 2024,
+      })
+      .expect(200);
+
+    expect(response.body.title).toBe('A Better Orchard');
+    expect(mockBookService.assertAccess).toHaveBeenCalledWith(mockBook.id, undefined);
+    expect(mockBookMutationService.updateBook).toHaveBeenCalledWith(expect.objectContaining({
+      id: mockBook.id,
+      title: 'A Better Orchard',
+      genres: ['Fiction', 'Mystery'],
+      publishedYear: 2024,
+    }));
   });
 });

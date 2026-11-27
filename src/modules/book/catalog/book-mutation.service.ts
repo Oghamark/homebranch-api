@@ -16,6 +16,7 @@ import { Book, copyBook } from 'src/modules/book/book.model';
 import { BookFormatEntity } from 'src/modules/book/format/book-format.entity';
 import {
   buildBookFormatMetadata,
+  cloneBookFormat,
   toBookOverridesFromFormat,
   withBookMetadataFallback,
 } from 'src/modules/book/format/book-format-metadata';
@@ -24,6 +25,7 @@ import { BookFileMetadata } from 'src/modules/book/format/book-file-metadata.int
 import { FileProcessingQueueService } from 'src/modules/queue/file-processing-queue.service';
 import { BookPersistenceService } from 'src/modules/book/persistence/book.persistence';
 import { IStorageService, STORAGE_SERVICE_TOKEN } from '../../storage/storage.interface';
+import { SyncableMetadata, SyncableMetadataHelper } from 'src/common/value-objects/syncable-metadata';
 
 export interface LinkBooksRequest {
   targetBookId: string;
@@ -53,17 +55,67 @@ export class BookMutationService {
 
   async updateBook(request: UpdateBookRequest): Promise<Book> {
     const existing = await this.bookPersistenceService.findBookById(request.id);
+    const {
+      title,
+      author,
+      genres,
+      publishedYear,
+      summary,
+      series,
+      seriesPosition,
+      isbn,
+      externalWorkId,
+      editionId,
+      pageCount,
+      publisher,
+      language,
+    } = request;
+    const formatOverrides = Object.fromEntries(
+      Object.entries({
+        title,
+        author,
+        genres,
+        publishedYear,
+        summary,
+        series,
+        seriesPosition,
+        isbn,
+        externalWorkId,
+        editionId,
+        pageCount,
+        publisher,
+        language,
+      }).filter(([, value]) => value !== undefined),
+    );
+    const syncableFields: (keyof SyncableMetadata)[] = [
+      'title',
+      'author',
+      'genres',
+      'publishedYear',
+      'summary',
+      'series',
+      'seriesPosition',
+      'isbn',
+      'publisher',
+      'language',
+    ];
+    const preferredDbFields = syncableFields.filter((field) => request[field] !== undefined);
     const book = copyBook(existing, {
       ...request,
+      formats: existing.formats?.map((format) => cloneBookFormat(format, formatOverrides)),
+      syncedMetadata: existing.syncedMetadata ?? { ...SyncableMetadataHelper.fromBook(existing) },
       metadataUpdatedAt: new Date(),
     });
 
     const updatedBook = await this.bookPersistenceService.updateBookRecord(request.id, book);
-    await this.fileProcessingQueue.enqueueMetadataSync(
-      request.id,
-      updatedBook.fileName,
-      `books/${updatedBook.fileName}`,
-      { jobId: `sync-${request.id}` },
+    const formats = getAvailableBookFormatsFromBook(updatedBook);
+    const files = formats.length > 0 ? formats.map((format) => format.fileName) : [updatedBook.fileName];
+    await Promise.all(
+      [...new Set(files)].filter(Boolean).map((fileName) =>
+        this.fileProcessingQueue.enqueueMetadataSync(request.id, fileName, `books/${fileName}`, {
+          preferredDbFields,
+        }),
+      ),
     );
 
     return updatedBook;

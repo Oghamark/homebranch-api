@@ -29,7 +29,7 @@ const BOOK_FORMAT_DEFINITIONS: BookFormatDefinition[] = [
     preferenceOrder: 1,
     supportsManifest: false,
     supportsContentEntries: false,
-    supportsMetadataWrite: false,
+    supportsMetadataWrite: true,
   },
   {
     format: BookFormatType.MP3,
@@ -38,7 +38,7 @@ const BOOK_FORMAT_DEFINITIONS: BookFormatDefinition[] = [
     preferenceOrder: 3,
     supportsManifest: false,
     supportsContentEntries: false,
-    supportsMetadataWrite: false,
+    supportsMetadataWrite: true,
   },
   {
     format: BookFormatType.M4B,
