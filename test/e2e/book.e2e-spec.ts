@@ -237,11 +237,13 @@ describe('BookController (e2e)', () => {
 
     expect(response.body.title).toBe('A Better Orchard');
     expect(mockBookService.assertAccess).toHaveBeenCalledWith(mockBook.id, undefined);
-    expect(mockBookMutationService.updateBook).toHaveBeenCalledWith(expect.objectContaining({
-      id: mockBook.id,
-      title: 'A Better Orchard',
-      genres: ['Fiction', 'Mystery'],
-      publishedYear: 2024,
-    }));
+    expect(mockBookMutationService.updateBook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: mockBook.id,
+        title: 'A Better Orchard',
+        genres: ['Fiction', 'Mystery'],
+        publishedYear: 2024,
+      }),
+    );
   });
 });
